@@ -364,7 +364,7 @@ wanted, belongs to whoever is driving the render.
 
 | Result | Measurement |
 |---|---|
-| **89 / 89** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, engine boundaries, and render delegation |
+| **96 / 96** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, and render delegation |
 | **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` (kajisho5/ffmpeg-skill, skill version 0.9.1) — not a hand-rolled stub — including a real burn-in verified by `ffprobe` and by asserting ffmpeg-skill's own reported command line used the `subtitles=` filter |
 | **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
@@ -382,7 +382,13 @@ OS."
 
 ```bash
 pip install -e .          # from a checkout; not yet published to PyPI
+subtitle-skill install    # place SKILL.md for Claude Code (--cursor, --codex, --all, --project, --dir, --uninstall)
 ```
+
+`install` only places `SKILL.md` for agent discovery — it does not copy
+the runtime. The `subtitle-skill` command itself must already be on
+`PATH` from the `pip install` step above; unlike ffmpeg-skill's
+standalone scripts, this is a regular installed Python package.
 
 ## Requirements
 

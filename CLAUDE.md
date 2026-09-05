@@ -79,21 +79,7 @@ that list that can drift from `contract --json`.
 
 Ordered by value, not urgency:
 
-1. **No Agent Skill installer.** ffmpeg-skill ships `bin/install.js`
-   (an `npx ffmpeg-skill` command that copies `SKILL.md` + `scripts/`
-   into `~/.claude/skills/ffmpeg-skill`, `~/.cursor/skills/...`, etc.,
-   so an agent discovers it without a manual step). subtitle-skill has
-   no equivalent — an agent only discovers `SKILL.md` if a human
-   manually places it in a skills directory. Unlike ffmpeg-skill's
-   standalone stdlib scripts, subtitle-skill is a real installed Python
-   package with relative imports, so a literal file-copy-based installer
-   won't "just run" the way ffmpeg-skill's does — solving this properly
-   needs either (a) a thin installer that copies `SKILL.md` only and
-   documents `pip install` as a prerequisite, or (b) packaging
-   subtitle-skill so its `scripts/`-equivalent is standalone-runnable
-   like ffmpeg-skill's. Don't build (b) without deciding it's worth the
-   architectural change; (a) is the safe, small, additive option.
-2. **Vendored ffmpeg-skill test fixture can silently drift.**
+1. **Vendored ffmpeg-skill test fixture can silently drift.**
    `tests/fixtures/ffmpeg_skill_vendor/` is a pinned, byte-for-byte copy
    of ffmpeg-skill's `caption.py`/`probe.py`/`_common.py`/`_contract.py`
    at commit `2abd89c`. Nothing detects if real ffmpeg-skill main moves
@@ -101,11 +87,29 @@ Ordered by value, not urgency:
    pre-release check) that clones current ffmpeg-skill main and diffs
    those four files against the vendored copy would catch that; not yet
    built.
-3. **`video-production-agent` integration is unstarted** (see above) —
+2. **`video-production-agent` integration is unstarted** (see above) —
    not this repo's task to fix, but worth re-checking periodically
    whether that repo has moved past its Phase 1 and needs a
    `SubtitleDocument`-shaped `render`/`generate` call added to its
    registry.
+3. **PyPI publication itself** — metadata is ready (see below); nothing
+   has actually been uploaded. Requires a human decision (account,
+   namespace, when) — not something to do unilaterally.
+
+### Done since the gaps above were first written
+
+- **Agent Skill installer** (`subtitle-skill install [--claude|--cursor|--codex|--all|--project|--dir PATH] [--uninstall] [--json]`,
+  `src/subtitle_skill/installer.py`) — places the packaged `SKILL.md` in
+  the standard agent skill directories, mirroring ffmpeg-skill's
+  `bin/install.js` flag convention. Deliberately option (a) from the
+  original note below: it copies only `SKILL.md`, not a runtime — the
+  `subtitle-skill` command still needs `pip install` on `PATH`
+  separately, and the CLI says so. Verified against a real, non-editable
+  `pip install` (not just an editable checkout) that the packaged
+  `SKILL.md` (via `[tool.setuptools.package-data]`) actually ships and
+  that `install`/`install --all`/`install --uninstall` all work.
+  `tests/test_installer.py` also guards the packaged copy against
+  drifting from the repo-root `SKILL.md`.
 
 ## Things intentionally NOT done, and why
 
@@ -124,7 +128,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 89 tests, `pytest -q`, all passing; CI green on
+At last update: 96 tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.
