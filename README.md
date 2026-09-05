@@ -15,6 +15,7 @@
   <a href="https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml"><img src="https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/deterministic-yes-brightgreen" alt="Deterministic">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
 </p>
 
 ```bash
@@ -436,4 +437,4 @@ requests are just as welcome.
 
 ## License
 
-No license file is currently included in this repository.
+[MIT](LICENSE)
