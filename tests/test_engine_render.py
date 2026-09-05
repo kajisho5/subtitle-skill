@@ -1,133 +1,56 @@
-"""Render/burn-in tests using a stub 'ffmpeg-skill' executable.
+"""Render/burn-in tests against ffmpeg-skill's real `caption`/`probe` contract.
 
-subtitle-skill must never build FFmpeg commands itself -- it only invokes
-whatever execution skill is configured on PATH via that skill's own
-`run - --json` contract. This stub plays the role of ffmpeg-skill so we
-can test the delegation code path deterministically without depending on
-ffmpeg-skill's real (out-of-scope) source. If a real `ffmpeg` binary is
-present, the stub also performs a genuine burn-in so the test is a true
-media E2E; otherwise it fabricates a minimal but valid output file so the
-delegation contract itself is still exercised.
+These run the actual, vendored ffmpeg-skill scripts (see
+tests/fixtures/ffmpeg_skill_vendor/README.md for provenance) rather than a
+hand-rolled stub: `subtitle_skill.engine` was written and verified against
+ffmpeg-skill's real CLI contract (docs/contract.md, scripts/_contract.py,
+scripts/caption.py -- confirmed by running them, not by reading docs alone),
+and these tests exercise that same code, unmodified, end to end.
 """
 import json
 import os
 import shutil
 import subprocess
 import sys
-import textwrap
+from pathlib import Path
 
 import pytest
 
-STUB_MODULE_SOURCE = textwrap.dedent(
-    """
-    import json, shutil, subprocess, sys
-
-    def main():
-        assert sys.argv[1:3] == ["run", "-"]
-        request = json.loads(sys.stdin.read())
-        assert request["operation"] == "burn_in_subtitles"
-        video = request["input_video"]
-        subs = request["subtitle_file"]
-        out = request["output_video"]
-
-        ffmpeg = shutil.which("ffmpeg")
-        if ffmpeg:
-            cmd = [ffmpeg, "-y", "-i", video, "-vf", f"subtitles={subs}", out]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
-            if proc.returncode != 0:
-                print(json.dumps({"status": "error", "message": proc.stderr[-2000:]}))
-                return 1
-        else:
-            shutil.copyfile(video, out)
-
-        print(json.dumps({"status": "ok", "output": out, "engine_version": "stub-1.0"}))
-        return 0
-
-    if __name__ == "__main__":
-        raise SystemExit(main())
-    """
-)
-
-STUB_PYPROJECT = textwrap.dedent(
-    """
-    [build-system]
-    requires = ["setuptools>=68"]
-    build-backend = "setuptools.build_meta"
-
-    [project]
-    name = "ffmpeg-skill-test-stub"
-    version = "0.0.1"
-
-    [project.scripts]
-    ffmpeg-skill = "ffmpeg_skill_stub:main"
-
-    [tool.setuptools]
-    py-modules = ["ffmpeg_skill_stub"]
-    """
-)
+VENDOR_ROOT = Path(__file__).parent / "fixtures" / "ffmpeg_skill_vendor"
 
 
 @pytest.fixture()
-def stub_ffmpeg_skill(tmp_path, monkeypatch):
-    """Install a fake 'ffmpeg-skill' as a real console-script executable.
-
-    A hand-rolled POSIX shell/`.cmd` wrapper is not portable here: Windows'
-    CreateProcess (used by subprocess without shell=True, which this skill
-    requires) cannot launch a shebang script or a batch file directly. The
-    same mechanism a real `ffmpeg-skill` package would use to install its
-    CLI -- a setuptools `console_scripts` entry point -- produces a native
-    launcher on every platform, so we use exactly that instead of trying to
-    reinvent it per-OS.
+def ffmpeg_skill_install(tmp_path, monkeypatch):
+    """Copy the vendored ffmpeg-skill scripts into a fresh 'install' dir and
+    point subtitle_skill.engine at it -- exactly how a real ~/.claude/skills/
+    ffmpeg-skill install looks to subtitle-skill.
     """
-    pkg_dir = tmp_path / "ffmpeg_skill_stub_pkg"
-    pkg_dir.mkdir()
-    (pkg_dir / "pyproject.toml").write_text(STUB_PYPROJECT)
-    (pkg_dir / "ffmpeg_skill_stub.py").write_text(STUB_MODULE_SOURCE)
+    install_dir = tmp_path / "ffmpeg-skill-install"
+    shutil.copytree(VENDOR_ROOT / "scripts", install_dir / "scripts")
+    monkeypatch.setenv("SUBTITLE_SKILL_FFMPEG_SKILL_DIR", str(install_dir))
+    return install_dir
 
+
+def _make_tiny_video(path: Path, duration: float = 1.0) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("real ffmpeg is required for render tests (ffmpeg-skill/caption always needs it)")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--quiet", "-e", str(pkg_dir)],
+        [
+            ffmpeg, "-y", "-f", "lavfi", "-i", f"color=c=blue:s=64x64:d={duration}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
+        ],
         check=True,
+        capture_output=True,
     )
 
-    def _uninstall():
-        subprocess.run(
-            [sys.executable, "-m", "pip", "uninstall", "--quiet", "-y", "ffmpeg-skill-test-stub"],
-            check=False,
-        )
 
-    monkeypatch.delenv("SUBTITLE_SKILL_FFMPEG_SKILL_BIN", raising=False)
-    resolved = shutil.which("ffmpeg-skill")
-    assert resolved, "console-script install did not put 'ffmpeg-skill' on PATH"
-    yield resolved
-    _uninstall()
-
-
-def _make_tiny_video(path):
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg:
-        subprocess.run(
-            [
-                ffmpeg, "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path),
-            ],
-            check=True,
-            capture_output=True,
-        )
-    else:
-        path.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 256)  # not a real mp4, delegation-only test
-
-
-def test_render_delegates_to_execution_skill(tmp_path, stub_ffmpeg_skill):
-    from subtitle_skill.operations import execute
-
-    video_path = tmp_path / "in.mp4"
-    _make_tiny_video(video_path)
-
-    request = {
+def _base_request(tmp_path, output_path="out.mp4"):
+    return {
         "operation": "render",
         "workspace": str(tmp_path),
         "format": "srt",
-        "output_path": "out.mp4",
+        "output_path": output_path,
         "video_input": "in.mp4",
         "subtitle": {
             "id": "d",
@@ -135,32 +58,98 @@ def test_render_delegates_to_execution_skill(tmp_path, stub_ffmpeg_skill):
             "cues": [{"id": "c1", "start": 0, "end": 1, "text": "hello world"}],
         },
     }
-    response = execute(request)
+
+
+def test_ffmpeg_skill_not_found_is_dependency_error(tmp_path, monkeypatch):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    monkeypatch.setenv("SUBTITLE_SKILL_FFMPEG_SKILL_DIR", str(tmp_path / "nowhere"))
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_base_request(tmp_path))
+    assert exc.value.code == "DEPENDENCY_ERROR"
+
+
+def test_render_only_accepts_srt(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+    request = _base_request(tmp_path)
+    request["format"] = "vtt"
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "UNSUPPORTED_FORMAT"
+
+
+def test_render_delegates_to_real_ffmpeg_skill_caption(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.provenance import sha256_file
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    response = execute(_base_request(tmp_path))
     assert response["status"] == "ok"
     assert response["engine"] == "ffmpeg-skill"
+
     out = tmp_path / "out.mp4"
     assert out.exists() and out.stat().st_size > 0
-    assert response["sha256"] == __import__("subtitle_skill.provenance", fromlist=["sha256_file"]).sha256_file(out)
+    assert response["sha256"] == sha256_file(out)
+
+    # not just exit 0: the source video is actually gone through ffmpeg-skill's
+    # real `caption` tool, which reports its own ffprobe of the output.
+    ffprobe = shutil.which("ffprobe")
+    proc = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(out)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    duration = float(json.loads(proc.stdout)["format"]["duration"])
+    assert duration == pytest.approx(1.0, abs=0.25)
 
 
-def test_render_reuse(tmp_path, stub_ffmpeg_skill):
+def test_render_command_actually_used_the_subtitles_filter(tmp_path, ffmpeg_skill_install, monkeypatch):
+    """Confirm the real transformation happened, not merely that the process exited 0.
+
+    subtitle-skill cannot verify caption *content* pixel-by-pixel (that is
+    ffmpeg-skill/look plus human or agent judgement -- explicitly out of
+    subtitle-skill's deterministic scope), but it can and does capture
+    ffmpeg-skill's own reported command line, which must reference the
+    subtitles filter and our generated SRT file.
+    """
+    import subtitle_skill.engine as engine_module
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+    output_path = tmp_path / "out.mp4"
+    srt_path = tmp_path / "cues.srt"
+    srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello world\n\n", encoding="utf-8")
+
+    response = engine_module.burn_in(
+        video_path=video_path,
+        subtitle_path=srt_path,
+        subtitle_format="srt",
+        output_path=output_path,
+    )
+    commands = response.get("commands", [])
+    assert commands, "ffmpeg-skill/caption reported no ffmpeg command line"
+    assert any("subtitles=" in c and str(srt_path) in c for c in commands)
+
+
+def test_render_reuse(tmp_path, ffmpeg_skill_install):
     from subtitle_skill.operations import execute
 
     video_path = tmp_path / "in.mp4"
     _make_tiny_video(video_path)
 
-    request = {
-        "operation": "render",
-        "workspace": str(tmp_path),
-        "format": "srt",
-        "output_path": "out.mp4",
-        "video_input": "in.mp4",
-        "subtitle": {
-            "id": "d",
-            "language": "en",
-            "cues": [{"id": "c1", "start": 0, "end": 1, "text": "hello world"}],
-        },
-    }
+    request = _base_request(tmp_path)
     first = execute(request)
     second = execute(request)
     assert first["reused"] is False
@@ -168,35 +157,80 @@ def test_render_reuse(tmp_path, stub_ffmpeg_skill):
     assert first["sha256"] == second["sha256"]
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="requires real ffmpeg for a genuine media E2E")
-def test_render_real_media_produces_playable_output(tmp_path, stub_ffmpeg_skill):
+def test_render_rejects_video_with_no_video_stream(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("real ffmpeg is required")
+    audio_path = tmp_path / "in.mp4"
+    subprocess.run(
+        [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-vn", str(audio_path)],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_base_request(tmp_path))
+    assert exc.value.code == "INVALID_INPUT"
+
+
+def test_render_missing_video_input_file(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_base_request(tmp_path))
+    assert exc.value.code == "MISSING_INPUT"
+
+
+def test_render_identity_changes_when_engine_version_changes(tmp_path, ffmpeg_skill_install):
+    """A cached render must not be reused across an ffmpeg-skill upgrade:
+    a different ffmpeg-skill build can change encoder defaults / output
+    bytes for the same subtitle document and video.
+    """
     from subtitle_skill.operations import execute
 
     video_path = tmp_path / "in.mp4"
     _make_tiny_video(video_path)
+    (ffmpeg_skill_install / "package.json").write_text(json.dumps({"version": "0.9.1"}), encoding="utf-8")
 
-    request = {
-        "operation": "render",
-        "workspace": str(tmp_path),
-        "format": "srt",
-        "output_path": "out.mp4",
-        "video_input": "in.mp4",
-        "subtitle": {
-            "id": "d",
-            "language": "en",
-            "cues": [{"id": "c1", "start": 0, "end": 1, "text": "hello world"}],
-        },
-    }
-    response = execute(request)
-    assert response["status"] == "ok"
+    first = execute(_base_request(tmp_path))
+    assert first["reused"] is False
+    assert first["engine_version"] == "0.9.1"
 
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe:
-        proc = subprocess.run(
-            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(tmp_path / "out.mp4")],
-            capture_output=True,
-            text=True,
-        )
-        assert proc.returncode == 0
-        duration = json.loads(proc.stdout)["format"]["duration"]
-        assert float(duration) > 0
+    second = execute(_base_request(tmp_path))
+    assert second["reused"] is True
+
+    (ffmpeg_skill_install / "package.json").write_text(json.dumps({"version": "0.9.2"}), encoding="utf-8")
+    third = execute(_base_request(tmp_path))
+    assert third["reused"] is False
+    assert third["engine_version"] == "0.9.2"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fake ffmpeg shell script is not directly runnable on Windows")
+def test_ffmpeg_failure_maps_to_tool_error(tmp_path, ffmpeg_skill_install, monkeypatch):
+    """ffmpeg-skill's error.kind == "ffmpeg" (the ffmpeg process itself failed,
+    as opposed to a bad input or a missing tool) must map to TOOL_ERROR, not a
+    blanket DEPENDENCY_ERROR -- confirmed by making the real ffmpeg binary
+    fail, not by asserting on engine.py's internals.
+    """
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    real_ffprobe = shutil.which("ffprobe")
+    (fake_bin / "ffmpeg").write_text("#!/bin/sh\necho 'fake ffmpeg failure' >&2\nexit 1\n")
+    (fake_bin / "ffmpeg").chmod(0o755)
+    shutil.copy(real_ffprobe, fake_bin / "ffprobe")
+    (fake_bin / "ffprobe").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_base_request(tmp_path))
+    assert exc.value.code == "TOOL_ERROR"

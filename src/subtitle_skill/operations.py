@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
-from .engine import burn_in
+from .engine import burn_in, ffmpeg_skill_version, resolve_ffmpeg_skill_root
 from .errors import SubtitleSkillError
 from .formats import GENERATORS, SUPPORTED_FORMATS
 from .models import SubtitleDocument
@@ -149,6 +149,12 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
 
 
 def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started) -> dict:
+    if fmt != "srt":
+        raise SubtitleSkillError(
+            "UNSUPPORTED_FORMAT",
+            f"render only supports format='srt' (ffmpeg-skill/caption burns SRT or ASS, never {fmt!r})",
+        )
+
     video_input_rel = request.get("video_input")
     if not isinstance(video_input_rel, str) or not video_input_rel:
         raise SubtitleSkillError("MISSING_INPUT", "request.video_input is required for the render operation")
@@ -157,16 +163,34 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     video_sha256 = sha256_file(video_path)
     output_path = policy.resolve_output(output_path_rel)
 
+    # ffmpeg-skill's own version is part of the render identity: a different
+    # ffmpeg-skill build can change encoder defaults/output bytes for the
+    # same inputs, so a cached render from a since-upgraded ffmpeg-skill
+    # must not be reused as if nothing changed.
+    ffmpeg_skill_root = resolve_ffmpeg_skill_root()
+    engine_version = ffmpeg_skill_version(ffmpeg_skill_root) if ffmpeg_skill_root else None
+
     identity = compute_identity(
         skill_version=SKILL_VERSION,
         contract_version=CONTRACT_VERSION,
         operation="render",
-        payload=_identity_payload(document, fmt, constraints, {"video_sha256": video_sha256}),
+        payload=_identity_payload(
+            document, fmt, constraints, {"video_sha256": video_sha256, "engine_version": engine_version}
+        ),
     )
 
     reused = _try_reuse(output_path, identity)
     if reused is not None:
-        return _finish(reused, output_path, issues, "render", reused=True, started=started, engine="ffmpeg-skill")
+        return _finish(
+            reused,
+            output_path,
+            issues,
+            "render",
+            reused=True,
+            started=started,
+            engine="ffmpeg-skill",
+            engine_version=reused.get("engine_version"),
+        )
 
     subtitle_content = GENERATORS[fmt](document)
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{fmt}")
@@ -193,13 +217,33 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         "size": output_path.stat().st_size,
         "cue_count": len(document.cues),
         "engine": "ffmpeg-skill",
-        "engine_response": {k: v for k, v in engine_response.items() if k not in ("status",)},
+        "engine_version": engine_response.get("engine_skill_version"),
+        "engine_response": {k: v for k, v in engine_response.items() if k not in ("status", "engine_skill_version")},
     }
     _write_sidecar(output_path, record)
-    return _finish(record, output_path, issues, "render", reused=False, started=started, engine="ffmpeg-skill")
+    return _finish(
+        record,
+        output_path,
+        issues,
+        "render",
+        reused=False,
+        started=started,
+        engine="ffmpeg-skill",
+        engine_version=record["engine_version"],
+    )
 
 
-def _finish(record: dict, output_path: Path, issues, operation: str, *, reused: bool, started: float, engine: Optional[str] = None) -> dict:
+def _finish(
+    record: dict,
+    output_path: Path,
+    issues,
+    operation: str,
+    *,
+    reused: bool,
+    started: float,
+    engine: Optional[str] = None,
+    engine_version: Optional[str] = None,
+) -> dict:
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise SubtitleSkillError("OUTPUT_ERROR", "output file is missing or empty after execution")
 
@@ -221,4 +265,5 @@ def _finish(record: dict, output_path: Path, issues, operation: str, *, reused: 
     }
     if engine is not None:
         response["engine"] = engine
+        response["engine_version"] = engine_version
     return response
