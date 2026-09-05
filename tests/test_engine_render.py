@@ -85,7 +85,7 @@ def stub_ffmpeg_skill(tmp_path, monkeypatch):
     (pkg_dir / "ffmpeg_skill_stub.py").write_text(STUB_MODULE_SOURCE)
 
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--quiet", "--no-build-isolation", "-e", str(pkg_dir)],
+        [sys.executable, "-m", "pip", "install", "--quiet", "-e", str(pkg_dir)],
         check=True,
     )
 
