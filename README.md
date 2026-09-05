@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="subtitle-skill: words make video reach further" width="760">
+</p>
+
 <h1 align="center">subtitle-skill</h1>
 
 <p align="center"><strong>Words make video reach further — deterministically.</strong></p>
