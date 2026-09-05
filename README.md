@@ -37,7 +37,7 @@ that wasn't handed to it.
 ---
 
 **Contents**
-[Why](#why) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Design principles](#design-principles) · [Operations](#operations) · [Format support](#format-support) · [Validation is not cosmetic](#validation-is-not-cosmetic) · [Built for agents](#built-for-agents) · [ffmpeg-skill integration](#ffmpeg-skill-integration) · [Verified](#verified) · [Install](#install) · [Development](#development) · [Docs](#docs)
+[Why](#why) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Design principles](#design-principles) · [Operations](#operations) · [Format support](#format-support) · [Validation is not cosmetic](#validation-is-not-cosmetic) · [Built for agents](#built-for-agents) · [ffmpeg-skill integration](#ffmpeg-skill-integration) · [Verified](#verified) · [Install](#install) · [Development](#development) · [Docs](#docs) · [Support](#support)
 
 ---
 
@@ -427,6 +427,12 @@ or filter execution.
 
 Not yet implemented, and not advertised in `contract --json`: `convert`,
 `offset`, `merge`, ASS/SSA generation or rendering.
+
+## Support
+
+If this skill saves you time, you can help keep it maintained through
+[GitHub Sponsors](https://github.com/sponsors/kajisho5). Issues and pull
+requests are just as welcome.
 
 ## License
 
