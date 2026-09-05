@@ -12,17 +12,15 @@ delegation contract itself is still exercised.
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import textwrap
 
 import pytest
 
-STUB_SOURCE = textwrap.dedent(
+STUB_MODULE_SOURCE = textwrap.dedent(
     """
-    #!/usr/bin/env python3
-    import json, shutil, subprocess, sys, os
+    import json, shutil, subprocess, sys
 
     def main():
         assert sys.argv[1:3] == ["run", "-"]
@@ -50,22 +48,58 @@ STUB_SOURCE = textwrap.dedent(
     """
 )
 
+STUB_PYPROJECT = textwrap.dedent(
+    """
+    [build-system]
+    requires = ["setuptools>=68"]
+    build-backend = "setuptools.build_meta"
+
+    [project]
+    name = "ffmpeg-skill-test-stub"
+    version = "0.0.1"
+
+    [project.scripts]
+    ffmpeg-skill = "ffmpeg_skill_stub:main"
+
+    [tool.setuptools]
+    py-modules = ["ffmpeg_skill_stub"]
+    """
+)
+
 
 @pytest.fixture()
 def stub_ffmpeg_skill(tmp_path, monkeypatch):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub_path = bin_dir / "ffmpeg-skill"
-    stub_path.write_text(STUB_SOURCE)
-    stub_path.chmod(stub_path.stat().st_mode | stat.S_IEXEC)
+    """Install a fake 'ffmpeg-skill' as a real console-script executable.
 
-    wrapper = bin_dir / "ffmpeg-skill-wrapper"
-    wrapper.write_text(f"#!/bin/sh\nexec {sys.executable} {stub_path} \"$@\"\n")
-    wrapper.chmod(wrapper.stat().st_mode | stat.S_IEXEC)
+    A hand-rolled POSIX shell/`.cmd` wrapper is not portable here: Windows'
+    CreateProcess (used by subprocess without shell=True, which this skill
+    requires) cannot launch a shebang script or a batch file directly. The
+    same mechanism a real `ffmpeg-skill` package would use to install its
+    CLI -- a setuptools `console_scripts` entry point -- produces a native
+    launcher on every platform, so we use exactly that instead of trying to
+    reinvent it per-OS.
+    """
+    pkg_dir = tmp_path / "ffmpeg_skill_stub_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "pyproject.toml").write_text(STUB_PYPROJECT)
+    (pkg_dir / "ffmpeg_skill_stub.py").write_text(STUB_MODULE_SOURCE)
 
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
-    monkeypatch.setenv("SUBTITLE_SKILL_FFMPEG_SKILL_BIN", str(wrapper))
-    return wrapper
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--quiet", "--no-build-isolation", "-e", str(pkg_dir)],
+        check=True,
+    )
+
+    def _uninstall():
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "--quiet", "-y", "ffmpeg-skill-test-stub"],
+            check=False,
+        )
+
+    monkeypatch.delenv("SUBTITLE_SKILL_FFMPEG_SKILL_BIN", raising=False)
+    resolved = shutil.which("ffmpeg-skill")
+    assert resolved, "console-script install did not put 'ffmpeg-skill' on PATH"
+    yield resolved
+    _uninstall()
 
 
 def _make_tiny_video(path):
