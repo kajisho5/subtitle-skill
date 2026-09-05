@@ -186,6 +186,12 @@ cannot be called.
 | `generate` | none | SRT, WebVTT | Validate the document, write a subtitle file |
 | `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in to ffmpeg-skill's `caption` tool, verify the output |
 
+`contract --json` also publishes `provides`: `generate` as Capability id
+`subtitle.generate`, `render` as `subtitle.render` — the cross-repository
+identifiers a registry (see `kajisho5/AI-video-production-OS`) can resolve
+to this Skill without hardcoding it. Additive; not a behavior change to
+either operation.
+
 ```json
 {
   "operation": "generate | render",
