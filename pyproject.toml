@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitle-skill"
+version = "0.1.0"
+description = "Deterministic subtitle validation, generation and rendering skill (no AI/production-decision logic)."
+requires-python = ">=3.9"
+readme = "README.md"
+
+[project.scripts]
+subtitle-skill = "subtitle_skill.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
