@@ -1,35 +1,77 @@
-# subtitle-skill
+<h1 align="center">subtitle-skill</h1>
 
-**Deterministic subtitle production and rendering for AI agents.**
+<p align="center"><strong>Words make video reach further — deterministically.</strong></p>
 
-[![CI](https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml/badge.svg)](https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+<p align="center">
+  Typed subtitle documents · Local execution · No AI reasoning · No cloud<br>
+  Part of the same execution-skill ecosystem as <a href="https://github.com/kajisho5/ffmpeg-skill">ffmpeg-skill</a>
+</p>
 
-subtitle-skill is not "AI that writes subtitles." It is the execution
-layer that takes a subtitle document another agent has already decided
-on and turns it into a real artifact — validated, deterministic,
-verified, and traceable:
+<p align="center">
+  <a href="https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml"><img src="https://github.com/kajisho5/subtitle-skill/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/deterministic-yes-brightgreen" alt="Deterministic">
+</p>
 
+```bash
+pip install -e .
 ```
-typed SubtitleDocument → validate → generate (SRT/WebVTT) or render (burn-in) → verify output → provenance
-```
 
-It exists so that **an upstream agent decides**, and **subtitle-skill
-executes safely** — no transcription, no editorial judgement, no
-arbitrary FFmpeg. See [What it does / doesn't do](#what-it-does--doesnt-do)
-below.
+`subtitle-skill` is not "AI that writes captions." It is the execution
+layer that turns a subtitle *decision* — already made by an upstream
+agent — into a real artifact: validated, deterministic, verified, and
+traceable. It never decides what a caption should say; it decides
+whether the timeline is valid, generates SRT/WebVTT, and — by
+delegating to [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill)'s
+`caption` tool — burns it into a video, then checks that the result is
+actually correct.
+
+If a typed `SubtitleDocument` and (for burn-in) an ffmpeg-skill install
+are on hand, it works: no network access, no API keys, nothing decided
+that wasn't handed to it.
 
 ---
 
-## Quick Start
+**Contents**
+[Why](#why) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Design principles](#design-principles) · [Operations](#operations) · [Format support](#format-support) · [Validation is not cosmetic](#validation-is-not-cosmetic) · [Built for agents](#built-for-agents) · [ffmpeg-skill integration](#ffmpeg-skill-integration) · [Verified](#verified) · [Install](#install) · [Development](#development) · [Docs](#docs)
+
+---
+
+## Why
+
+An agent that "handles captions" tends to guess: it burns a subtitle
+past the end of the video and calls it done, it forgets that a WebVTT
+file can't be burned in by the tool underneath it, or it reports success
+because a process exited `0` without checking what actually got
+written. subtitle-skill exists to take the guessing out of the
+*execution* half of captioning:
+
+- **Typed input, not a dict.** A subtitle is a `SubtitleDocument` of
+  `SubtitleCue`s — parsed and validated once, never touched as raw JSON
+  again.
+- **Fatal vs. observation, never confused.** A broken timeline is
+  rejected before anything is written. A borderline one (overlapping
+  cues, a line that's too long) is reported, never silently "fixed" —
+  no cue is ever deleted, reordered, merged, or shifted.
+- **Verification after execution.** A render is only "done" when the
+  output file exists, has a video stream, and its duration matches the
+  *actual*, measured input — not when a subprocess happens to exit `0`.
+- **A contract the agent can read.** `contract --json` states exactly
+  which operations, formats, parameters and error codes this version
+  supports. `doctor --json` states what can *actually* run right now.
+- **No decisions made here.** What the text says, how it's split, which
+  speaker to show — that's `video-production-agent`'s job. subtitle-skill
+  only ever receives the result, as a typed request.
+
+## Quick start
 
 ```bash
-pip install -e .            # from a checkout; not yet published to PyPI
-subtitle-skill doctor --json    # what can actually run on this machine
-subtitle-skill contract --json  # machine-readable operations/formats/errors
+pip install -e .
+subtitle-skill doctor --json     # what can actually run on this machine
+subtitle-skill contract --json   # operations, formats, parameters, errors
 ```
 
-Generate an SRT file from a typed subtitle document (no video needed):
+Generate an SRT file from a typed subtitle document — no video needed:
 
 ```bash
 cat > request.json <<'EOF'
@@ -52,134 +94,92 @@ subtitle-skill run request.json --json
 ```
 
 ```json
-{
-  "status": "ok", "operation": "generate", "output": ".../captions.srt",
-  "sha256": "4ffe0640...", "size": 103, "reused": false,
-  "observation": [], "timeline": {"cue_count": 2}, ...
-}
+{"status": "ok", "operation": "generate", "output": ".../captions.srt",
+ "sha256": "4ffe0640...", "size": 103, "reused": false,
+ "observation": [], "timeline": {"cue_count": 2}, ...}
 ```
 
-Burning that subtitle into a video (`"operation": "render"`) works the
-same way, but requires `format: "srt"` and an [ffmpeg-skill](#ffmpeg-skill-integration)
-install — see [Operations](#operations).
+Burning that same subtitle into a video — `"operation": "render"` —
+needs `format: "srt"` and a reachable ffmpeg-skill install (see
+[ffmpeg-skill integration](#ffmpeg-skill-integration)); the request
+shape is identical otherwise, just add `video_input`.
 
----
-
-## What it does / doesn't do
-
-subtitle-skill owns exactly this slice of a captioning pipeline:
-
-| | |
-|---|---|
-| ✅ Validate a subtitle timeline (overlaps, bad timestamps, unreadable cues) | ❌ Decide what the subtitle text should say |
-| ✅ Generate SRT / WebVTT files | ❌ Transcribe audio (speech-to-text) |
-| ✅ Burn subtitles into a video (delegated) | ❌ Speaker diarization |
-| ✅ Deterministic, content-addressed caching | ❌ Translate or summarize |
-| ✅ Verify the actual output, not just exit code 0 | ❌ Decide how to split a sentence into cues |
-| ✅ Record provenance for every artifact | ❌ Judge whether a render "looks right" |
-| | ❌ Run arbitrary FFmpeg commands or filters |
-
-That right-hand column isn't a list of missing features — it's the
-point. Those decisions belong to whatever agent is driving the
-pipeline (typically `video-production-agent`); subtitle-skill's job is
-to take the *result* of that decision — a typed `SubtitleDocument` — and
-execute it safely, the same way every time.
-
----
-
-## Architecture
+## How it works
 
 ```mermaid
 flowchart LR
     T[transcription-skill] -->|TranscriptSegment| A[video-production-agent]
-    A -->|decides cue text, splitting,<br/>speaker labels, timing| A
+    A -->|decides text, splitting,<br/>speaker labels, timing| A
     A -->|typed SubtitleDocument| S[subtitle-skill]
-    S -->|validate| S
-    S -->|generate| F[SRT / WebVTT file]
-    S -->|render: format=srt only| E[ffmpeg-skill / caption]
+    S -->|render only| E[ffmpeg-skill / caption]
     E --> V[video with burned-in captions]
+    S -->|generate| F[SRT / WebVTT file]
 ```
 
-subtitle-skill is a *leaf* execution skill: it receives an already-decided,
-typed request and executes it mechanically. It never reasons about
-content — only about correctness and safety.
+subtitle-skill sits at the bottom of that chain, as a *leaf* execution
+skill: it receives an already-decided, typed request and executes it
+mechanically. Internally:
 
-### Responsibility boundary
-
-| Concern | Owner |
-|---|---|
-| Speech recognition / transcription | `transcription-skill` |
-| Speaker diarization | `transcription-skill` (or a future dedicated skill) |
-| Deciding *what* the text should say, how to split/merge cues, which speaker to show | `video-production-agent` |
-| Subtitle cue/timeline validation, SRT/WebVTT generation, burn-in orchestration | **`subtitle-skill`** |
-| Building the actual FFmpeg command/filtergraph and encoding | `ffmpeg-skill` |
-
-subtitle-skill treats a `transcription-skill` segment and a subtitle
-`SubtitleCue` as **different types**. The `TranscriptSegment → SubtitleCue`
-decision (splitting long sentences, whether to show a speaker label,
-etc.) is the caller's responsibility; subtitle-skill only ever receives
-already-typed `SubtitleCue` objects.
-
-### Ecosystem
-
-```
-video-production-agent
-        │
-        ├── media-analysis-skill      (not integrated with; source not reviewed)
-        ├── transcription-skill       (upstream of this skill's input)
-        ├── subtitle-skill            <-- this repo
-        ├── audio-production-skill    (not integrated with; source not reviewed)
-        ├── motion-graphics-skill     (not integrated with; source not reviewed)
-        ├── color-grading-skill       (not integrated with; source not reviewed)
-        ├── thumbnail-skill           (not integrated with; source not reviewed)
-        └── ffmpeg-skill              (downstream of `render`; verified integration)
+```mermaid
+flowchart TD
+    R[Typed request] --> P[Parse + security screen<br/>recursive forbidden-key check]
+    P --> V[Validate<br/>fatal errors reject, observations report]
+    V --> G[Generate SRT / WebVTT]
+    G -->|render only| B[ffmpeg-skill probe → caption]
+    B --> O[Verify output<br/>exists, has video, duration matches]
+    G --> ID[Compute deterministic identity]
+    O --> ID
+    ID --> C{Cache hit?}
+    C -->|yes, sha256 verified| Reused[Return cached result]
+    C -->|no| W[Write output + provenance sidecar]
 ```
 
-Only the `ffmpeg-skill` edge is an actual, verified integration (see
-[ffmpeg-skill integration](#ffmpeg-skill-integration)). Every other
-skill above is named for orientation only — this repository does not
-call them, and their contracts were not reviewed here. Do not read
-"listed" as "integrated."
+## Design principles
 
----
+These are the rules the code enforces — not aspirations.
 
-## Data model
-
-Every subtitle is a typed `SubtitleDocument`, never a bare dict:
-
-- **`SubtitleDocument`**: `id`, `version`, `language` (BCP-47-ish tag),
-  `cues` (ordered list of `SubtitleCue`), `metadata`.
-- **`SubtitleCue`**: `id`, `start` (sec), `end` (sec), `text`,
-  `speaker` (optional), `style` (optional, allowlisted), `metadata`
-  (optional — auxiliary/provenance data, never rendered into subtitle
-  text).
-- **`SubtitleStyle`**: allowlisted fields only — `align`, `position`,
-  `line`, `size`, `bold`, `italic`, `color`. There is no free-form style
-  string; unknown fields are rejected.
-
----
+1. **Typed, not stringly.** Every subtitle is a `SubtitleDocument` /
+   `SubtitleCue` / `SubtitleStyle` — parsed through `from_dict` once;
+   nothing downstream touches a raw dict.
+2. **Fatal and observation are never the same code path.** `start < 0`,
+   `end <= start`, NaN/Infinity, duplicate ids, empty/invalid text, and a
+   cue past the video's real duration reject the request outright.
+   Overlaps, long lines, short/long cues, and reading speed are reported
+   in `observation` and never auto-corrected.
+3. **The request's `video_duration` is a hint, not a fact.** For
+   `render`, the document is re-validated against ffmpeg-skill's own
+   measured duration of the actual video — an omitted or wrong hint
+   can't let a cue past the real end of the video through silently.
+4. **No shell, no arbitrary executable, no arbitrary filter.** Every
+   subprocess call is a fixed argv list. `command`, `argv`, `shell`,
+   `executable`, `filter`, `filter_complex`, `vf`, `af`, `env`, `api_key`
+   are rejected anywhere in the request, at any nesting depth.
+5. **Workspace-confined paths.** Absolute paths, drive-qualified paths,
+   `..`, and Windows reserved device names are rejected; a resolved
+   (symlink-following) path must still land inside the workspace root.
+6. **Exit code `0` is never sufficient.** A render is accepted only when
+   ffmpeg-skill reports `"status": "completed"`, the output file exists
+   and is non-empty, it has a video stream, and its duration matches the
+   input within 0.25s.
+7. **Deterministic identity, content-addressed.** Same document, format,
+   constraints (and for `render`, the same video and the same
+   ffmpeg-skill script content) → same identity → a verified cache hit,
+   not a re-render. A corrupted or hash-mismatched cache is never
+   returned as reused.
+8. **Machine-readable contract.** `contract --json` is generated from
+   what's actually implemented — an operation or format that isn't
+   executable doesn't appear as supported.
 
 ## Operations
 
-Only two operations exist. Both appear in `contract --json`; nothing
-else does.
+Two operations exist. Both appear in `contract --json`; nothing else
+does — `convert`, `offset`, `merge`, and ASS/SSA are not implemented and
+cannot be called.
 
-### `generate`
-
-No video I/O. Validates the subtitle document and writes an SRT or
-WebVTT file.
-
-### `render`
-
-Requires `video_input`. **`format` must be `"srt"`** — ffmpeg-skill's
-`caption` tool (which does the actual burn-in) has no WebVTT support, so
-`render` with `format: "vtt"` fails immediately with
-`UNSUPPORTED_FORMAT`, before anything is generated. Validates the
-document (against the video's *actual*, measured duration — see
-[Validation](#validation)), generates the SRT, then delegates the
-burn-in to `ffmpeg-skill`.
-
-Both operations share one request shape:
+| Operation | Video I/O | Formats | What it does |
+|---|---|---|---|
+| `generate` | none | SRT, WebVTT | Validate the document, write a subtitle file |
+| `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in to ffmpeg-skill's `caption` tool, verify the output |
 
 ```json
 {
@@ -197,14 +197,8 @@ Both operations share one request shape:
 }
 ```
 
-- `video_input` / `video_duration`: `render` only.
-- `constraints`: optional for both; see [Validation](#validation).
-
-`convert`, `offset`, `merge`, and ASS/SSA support are **not**
-implemented. They may be considered for a future release, but do not
-appear in the contract and cannot be called.
-
----
+`video_input` / `video_duration` apply to `render` only; `constraints`
+is optional for both (see [Validation](#validation-is-not-cosmetic)).
 
 ## Format support
 
@@ -214,185 +208,120 @@ appear in the contract and cannot be called.
 | WebVTT | ✅ | ❌ `UNSUPPORTED_FORMAT` |
 
 **Generating a WebVTT file does not mean it can be burned in.** This is
-a real constraint of the execution layer `render` delegates to
-(ffmpeg-skill's `caption` tool burns SRT or ASS, never WebVTT), not an
-arbitrary restriction — see [ffmpeg-skill integration](#ffmpeg-skill-integration).
+a real constraint of the tool `render` delegates to — ffmpeg-skill's
+`caption` burns SRT or ASS, never WebVTT — not an arbitrary restriction.
+Requesting `render` with `format: "vtt"` fails immediately, before
+anything is generated.
 
-Neither generator silently drops style information it cannot represent
-— it raises `UNSUPPORTED_FORMAT` instead:
+Neither generator silently drops style it can't represent — it raises
+`UNSUPPORTED_FORMAT` instead:
 
-- **SRT**: no native cue positioning — `style.align`, `position`,
-  `line`, `size`, or `color` are rejected. `bold`/`italic` render as
-  `<b>`/`<i>` tags.
-- **WebVTT**: `align`/`position`/`line`/`size` are native cue settings.
-  `color` has no safe, non-CSS-injecting representation here and is
-  also rejected.
+| | SRT | WebVTT |
+|---|---|---|
+| `align` / `position` / `line` / `size` | rejected (no native positioning) | native cue settings |
+| `bold` / `italic` | `<b>` / `<i>` tags | `<b>` / `<i>` tags |
+| `color` | rejected | rejected (no safe, non-CSS-injecting form here) |
+| `speaker` | `"Speaker: "` text prefix | `"Speaker: "` text prefix |
 
-`speaker` renders as a plain `"Speaker: "` text prefix on the cue's
-first line in both formats — a fixed, typed convention, not a
-caller-supplied template. Cue/document `metadata` is auxiliary/provenance
-data and is never written into the rendered subtitle body.
+Cue/document `metadata` is auxiliary/provenance data — never written
+into the rendered subtitle body of either format.
 
----
+## Validation is not cosmetic
 
-## Validation
+Fatal and observation are separate systems, not a severity slider:
 
-Every cue is validated before anything is written. Two tiers, never
-confused with each other:
+**Fatal** — nothing is written:
+`start < 0`, `end <= start`, NaN/Infinity timestamps, duplicate cue ids,
+empty/whitespace-only or invalid-Unicode/control-character text, a cue
+past the video's actual duration.
 
-**Fatal** — rejected immediately, nothing is written:
-- `start < 0`, `end <= start`, `NaN`/`Infinity` timestamps
-- duplicate cue ids
-- empty/whitespace-only text, invalid control characters, invalid Unicode
-- a cue extending past the video's duration
-
-**Observation** — reported in the response, **never auto-corrected**
-(subtitle-skill never deletes, reorders, merges, or shifts a cue):
-- `CUE_OVERLAP`
-- `TOO_MANY_LINES` / `LINE_TOO_LONG` / `CUE_TOO_SHORT` / `CUE_TOO_LONG` / `READING_SPEED_TOO_HIGH`
+**Observation** — reported, never auto-corrected:
+`CUE_OVERLAP`, `TOO_MANY_LINES`, `LINE_TOO_LONG`, `CUE_TOO_SHORT`,
+`CUE_TOO_LONG`, `READING_SPEED_TOO_HIGH`.
 
 Thresholds (`max_chars_per_line`, `max_lines`, `min_duration`,
 `max_duration`, `reading_speed_cps`) are caller-supplied `constraints`,
 not hard-coded domain assumptions — defaults exist only so a caller may
 omit `constraints` entirely.
 
-<details>
-<summary><code>video_duration</code>: why <code>render</code> doesn't trust the request</summary>
-
-For `generate`, `video_duration` is only the optional, caller-supplied
-hint in the request — there's no video to measure. For `render`,
-`video_duration` in the request is **not trusted as authoritative**:
-the document is re-validated against ffmpeg-skill's own probed duration
-of the actual video before rendering, so an omitted or wrong
-`video_duration` hint can't let a cue past the real end of the video
-through silently.
-
-</details>
-
----
-
-## Deterministic execution & reuse
-
-Every `generate`/`render` call computes a content-addressed identity
-from the skill version, contract version, operation, the full canonical
-subtitle document, format, and constraints — never from timestamps,
-PIDs, or temp paths. If an output file and its sidecar
-(`<output>.subtitle-skill.json`) already exist with a matching identity,
-the sidecar's recorded sha256 is **re-verified against the file on
-disk** before being reported as `"reused": true`. A corrupted or
-hash-mismatched output is never returned as reused — it's regenerated.
-
-<details>
-<summary>Render identity: why it hashes ffmpeg-skill's actual script content, not its version string</summary>
-
-`render`'s identity additionally includes the input video's sha256 and a
-sha256 of the ffmpeg-skill scripts that will actually execute
-(`caption.py` + `_common.py`) — deliberately a content hash, not
-ffmpeg-skill's self-reported `package.json` version string. A version
-string is only as trustworthy as whoever last edited it: a hand-patched
-`caption.py` left next to an unbumped `package.json` would keep
-reporting the old version while behaving differently. The content hash
-changes if and only if the code that will actually run changes — a bare
-version bump with byte-identical scripts does *not* invalidate the
-cache, and a script edit with an unbumped version *does*.
-`package.json`'s version is kept only as a human-readable
-`engine_version` display field.
-
-</details>
-
----
-
-## Provenance
-
-Every artifact records how it was produced, in the response and in a
-`<output>.subtitle-skill.json` sidecar next to it:
-
-`skill` / `skill_version` / `contract_version`, `operation`, `output`,
-`sha256`, `size`, `reused`, `observation` (validation issues — possibly
-non-empty even on success), `timeline` (cue count), and for `render`:
-`engine` (`"ffmpeg-skill"`), `engine_version` (its `package.json`
-version, display only), `engine_script_sha256` (the real identity
-anchor — see above), and `engine_response` (ffmpeg-skill's own reported
-`commands` and `probe` of the output — always its actual values, never
-fabricated by subtitle-skill).
-
-A response is only accepted as successful if the output file actually
-exists and is non-empty — process exit code `0` alone is never treated
-as success.
-
-### Error model
-
-Every failure is a typed, stable code, never a free-form message to
-parse: `INVALID_REQUEST`, `INVALID_INPUT`, `UNSUPPORTED_OPERATION`,
-`UNSUPPORTED_FORMAT`, `INVALID_TIME_RANGE`, `DEPENDENCY_ERROR`,
-`PATH_NOT_ALLOWED`, `MISSING_INPUT`, `OUTPUT_ERROR`, `VALIDATION_ERROR`,
-`TOOL_ERROR`, `CANCELLED`, `INTERNAL_ERROR`. Each carries a `retryable`
-boolean — a bad request (`VALIDATION_ERROR`, `PATH_NOT_ALLOWED`, ...) is
-never retryable as-is; a transient `DEPENDENCY_ERROR` talking to
-ffmpeg-skill may be. The full list, kept in sync with the code, is in
-`contract --json`'s `errors` block.
-
----
-
 ## Built for agents
 
 subtitle-skill is a process boundary meant to be called by another
-agent, not a general-purpose CLI tool. Three entry points make that
-contract machine-readable:
+agent, not a general-purpose CLI tool.
 
-- **`contract --json`** — every operation, format, parameter, and error
-  code this version actually supports. An agent should read this
-  instead of guessing from documentation.
-- **`doctor --json`** — what can *actually run right now* on this
-  machine (see [Doctor](#doctor)).
-- **`run <request.json> --json`** — execute one operation; always a
-  single JSON document on stdout, success or failure.
+```bash
+subtitle-skill contract --json   # every operation, format, parameter, error this version supports
+subtitle-skill doctor --json     # what can actually run right now
+subtitle-skill run req.json --json   # execute one operation — always one JSON document on stdout
+```
 
-[`SKILL.md`](SKILL.md) is the agent-facing usage guide: when to call
-this skill, how to build a `SubtitleDocument`, the fatal/observation
+`contract --json` is generated to match what's implemented, not
+maintained beside it by hand: `deterministic: true`, per-operation
+`formats`, the full error-code list under `errors`, and `out_of_scope`
+naming what this skill deliberately does not do. `doctor --json` reports
+`render` as available only when an ffmpeg-skill install is found *and*
+its own `doctor` confirms the `caption` tool's required capabilities
+(`ffmpeg`, `ffprobe`, `encoder:libx264`, `encoder:aac`,
+`filter:subtitles`) — subtitle-skill asks ffmpeg-skill's own detection
+rather than re-implementing FFmpeg capability probing.
+
+[`SKILL.md`](SKILL.md) is the agent-facing usage guide: when to call this
+skill, how to build a `SubtitleDocument`, the fatal/observation
 distinction, and failure handling — written so an agent doesn't have to
 read the source to use this correctly.
 
 No MCP server, plugin loader, or agent-framework integration exists in
 this repository — only the CLI process boundary above.
 
----
+### Deterministic identity and reuse
 
-## Security
+A content-addressed identity is computed from the skill version,
+contract version, operation, the full canonical subtitle document,
+format, and constraints — never from timestamps, PIDs, or temp paths.
+For `render`, it additionally includes the input video's sha256 and a
+sha256 of the ffmpeg-skill scripts that will actually execute
+(`caption.py` + `_common.py`) — a content hash, not ffmpeg-skill's
+self-reported `package.json` version string, because a version string is
+only as trustworthy as whoever last edited it. If an output and its
+`<output>.subtitle-skill.json` sidecar already match the current
+identity, the sidecar's recorded sha256 is **re-verified against the
+file on disk** before being reported as `"reused": true`; a corrupted or
+hash-mismatched output is regenerated, never returned as reused.
 
-- **Recursive forbidden-key screening**: every request, at any nesting
-  depth, is scanned before parsing; `command`, `argv`, `shell`,
-  `executable`, `filter`, `filter_complex`, `vf`, `af`, `env`, `api_key`
-  anywhere reject the request with `INVALID_REQUEST`.
-- **No shell**: `shell=True` is never used; every subprocess call is a
+### Provenance
+
+Every artifact's sidecar and response record how it was produced:
+`skill` / `skill_version` / `contract_version`, `operation`, `sha256`,
+`size`, `reused`, `observation`, `timeline`, and for `render`: `engine`
+(`"ffmpeg-skill"`), `engine_version` (display only — its `package.json`
+version), `engine_script_sha256` (the real identity anchor, above), and
+`engine_response` (ffmpeg-skill's own reported `commands` and `probe` —
+always its actual values, never fabricated here).
+
+### Security
+
+- No shell (`shell=True` is never used); every subprocess call is a
   fixed argv list.
-- **No caller-supplied executable, filter string, or raw command** —
-  ever, at any layer.
-- **Workspace-confined paths** (`PathPolicy`): absolute and
-  drive-qualified paths rejected, `..` rejected by string inspection
-  before any filesystem call, the fully resolved (symlink-following)
-  path must still be inside the canonicalized workspace root, Windows
-  reserved device names (`CON`, `PRN`, `COM1`, ...) rejected. This is
-  defense in depth — the calling agent is expected to run its own
-  PathPolicy too, but subtitle-skill never trusts a caller's path
-  hygiene alone.
-- **Structured, typed errors** everywhere — see the error model in
-  `contract --json`'s `errors` block.
+- No caller-supplied executable path, FFmpeg filter string, or raw
+  command, at any layer.
+- Every request, at any nesting depth, is screened before parsing:
+  `command` / `argv` / `shell` / `executable` / `filter` /
+  `filter_complex` / `vf` / `af` / `env` / `api_key` anywhere reject it.
+- Workspace-confined, symlink-aware `PathPolicy`: absolute/drive paths,
+  `..`, and Windows reserved names rejected; a resolved path must still
+  land inside the workspace root.
+- Typed, stable error codes everywhere — see `errors` in
+  `contract --json`.
 
-This describes what subtitle-skill refuses to do, not a claim of
-invulnerability — no such claim is made here.
-
----
+This is what subtitle-skill refuses to do, not a claim that it's
+unbreakable.
 
 ## ffmpeg-skill integration
 
-`render` delegates burn-in to [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill)'s
-`caption` tool. This section was verified against ffmpeg-skill's actual
-source (`kajisho5/ffmpeg-skill`, skill version `0.9.1`) by running its
-scripts against real media, not by reading its README alone.
-
-**There is no single dispatch endpoint in ffmpeg-skill.** Every tool is
-its own script:
+`render` delegates burn-in to
+[ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill)'s `caption`
+tool. **There is no single dispatch endpoint in ffmpeg-skill** — every
+tool is its own script:
 
 ```
 python3 <ffmpeg-skill-install-dir>/scripts/<tool>.py [args] --json
@@ -405,78 +334,62 @@ python3 <ffmpeg-skill-install-dir>/scripts/<tool>.py [args] --json
    own installer writes to (`~/.claude/skills/ffmpeg-skill`,
    `~/.cursor/skills/ffmpeg-skill`, `~/.codex/skills/ffmpeg-skill`,
    `./.claude/skills/ffmpeg-skill`);
-2. runs `scripts/probe.py <video> --json` on the input first, to
-   confirm it has a video stream and to measure its actual duration;
+2. runs `scripts/probe.py <video> --json` first, to confirm a video
+   stream exists and measure the *actual* duration for validation;
 3. runs `scripts/caption.py <video> --srt <srt> -o <output> --json` — a
    fixed argv list, never a shell;
-4. accepts the result only when **all** of: exit code `0`, stdout
-   parses as JSON with `"status": "completed"`, the output file exists
-   and is non-empty, the response's own `probe.video` is present, and
-   the output's duration is within 0.25s of the input's. Exit code `0`
-   alone is never sufficient.
+4. accepts the result only when exit code `0`, `"status": "completed"`,
+   a non-empty output file, a `probe.video` in the response, and an
+   output duration within 0.25s of the input's — all hold.
 
 Failure responses follow ffmpeg-skill's own shape —
 `{"status": "failed", "error": {"kind": "input"|"ffmpeg"|"missing_tool", "message": "..."}}`
-— mapped onto subtitle-skill's error codes: `input` → `INVALID_INPUT`,
-`missing_tool` → `DEPENDENCY_ERROR`, `ffmpeg` → `TOOL_ERROR`. A response
-ffmpeg-skill did not produce at all (crash, timeout, malformed stdout)
-is `DEPENDENCY_ERROR`.
-
-<details>
-<summary>What subtitle-skill deliberately does <em>not</em> verify</summary>
+— mapped to `INVALID_INPUT` / `TOOL_ERROR` / `DEPENDENCY_ERROR`
+respectively; anything ffmpeg-skill didn't produce at all (crash,
+timeout, malformed stdout) is `DEPENDENCY_ERROR`.
 
 ffmpeg-skill's own contract marks `caption` as needing visual
-verification and recommends running `ffmpeg-skill/look` (a PNG contact
-sheet) on the output afterwards for a human or agent to inspect.
-subtitle-skill does not run or interpret `look` itself — judging
-whether the burnt-in captions *look* right is exactly the visual/AI
-judgement this skill's mandate excludes; that step belongs to whoever
-is driving the render. subtitle-skill's own verification is the
-deterministic, machine-checkable part: output exists, has a video
-stream, and its duration matches the input.
+verification (`ffmpeg-skill/look`, a PNG contact sheet, for a human or
+agent to inspect). subtitle-skill deliberately does not run or interpret
+`look` — judging whether burnt-in captions *look* right is exactly the
+visual/AI judgement this skill's mandate excludes. That verification, if
+wanted, belongs to whoever is driving the render.
 
-</details>
+## Verified
 
----
-
-## Doctor
-
-`doctor --json` reports only operations that can *actually* run right
-now:
-
-- `generate` is always listed.
-- `render` is listed **only** when an ffmpeg-skill install is located
-  *and* ffmpeg-skill's own `doctor` confirms the `caption` tool's
-  required capabilities (`ffmpeg`, `ffprobe`, `encoder:libx264`,
-  `encoder:aac`, `filter:subtitles`) are available — subtitle-skill asks
-  ffmpeg-skill's own detection rather than re-implementing FFmpeg
-  capability probing.
-
-If `render` is unavailable, `problems` explains why (install not found
-vs. a specific missing capability) and `healthy` is `false`. An
-*unknown* (not proven missing) capability is reported as a warning
-without disabling `render` — mirroring ffmpeg-skill's own three-state
-(`available`/`missing`/`unknown`) doctor semantics.
-
-**What `doctor` guarantees**: whether the dependencies `render` needs
-are detectable right now. **What it does not guarantee**: that a
-specific render request will succeed (a corrupt input video, a disk
-full at write time, etc. are still possible and still surfaced as
-typed errors).
-
----
-
-## Installation
+| Result | Measurement |
+|---|---|
+| **89 / 89** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, engine boundaries, and render delegation |
+| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` (kajisho5/ffmpeg-skill, skill version 0.9.1) — not a hand-rolled stub — including a real burn-in verified by `ffprobe` and by asserting ffmpeg-skill's own reported command line used the `subtitles=` filter |
+| **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
+| **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 
 ```bash
-pip install -e .
+pytest -q
 ```
 
-Requires Python ≥ 3.9 (declared in `pyproject.toml`, and actually
-exercised in CI — see [Development / Testing](#development--testing)). Not yet published to PyPI;
-install from a checkout.
+Only the Linux CI job is guaranteed to have `ffmpeg` on `PATH`; the
+real-burn-in tests `skip` gracefully elsewhere, so "CI green" means
+"logic verified everywhere," not "burn-in verified identically on every
+OS."
 
-## Development / Testing
+## Install
+
+```bash
+pip install -e .          # from a checkout; not yet published to PyPI
+```
+
+## Requirements
+
+- Python 3.9+ (declared in `pyproject.toml`; the floor version is
+  actually exercised in CI, not just declared)
+- For `render` only: an [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill)
+  install reachable via `SUBTITLE_SKILL_FFMPEG_SKILL_DIR` or its
+  standard install locations, itself requiring FFmpeg with `libx264`,
+  `aac`, and the `subtitles` (libass) filter — `doctor --json` reports
+  exactly what's missing.
+
+## Development
 
 ```bash
 pip install -e .
@@ -484,68 +397,32 @@ pip install pytest
 pytest -q
 ```
 
-| File | Covers |
+CI (`.github/workflows/ci.yml`) runs on Ubuntu, macOS, and Windows, on
+Python 3.9 and 3.11 (6 jobs). `PathPolicy` behavior is consistent across
+all three OSes.
+
+## Docs
+
+| | |
 |---|---|
-| `test_models.py` | typed model validation (timeline, uniqueness, style allowlist) |
-| `test_validation.py` | timeline/text validation, overlap reporting, configurable constraints |
-| `test_formats.py` | SRT/WebVTT generation, Unicode, unsupported-style rejection, ordering |
-| `test_pathpolicy.py` | traversal, absolute paths, symlink escape, reserved names |
-| `test_security.py` | forbidden-key rejection (top-level and nested), path rejection |
-| `test_cli.py` | `contract`/`doctor`/`run` JSON process boundary, malformed input, typed errors, determinism/reuse |
-| `test_doctor.py` | render availability tied to ffmpeg-skill's real, dynamically detected capabilities |
-| `test_engine_render.py` | render delegation against a **vendored, real copy** of ffmpeg-skill's `caption`/`probe` scripts — including an actual burn-in verified by `ffprobe` when a real `ffmpeg` is present |
-| `test_engine_boundaries.py` | precise duration-tolerance and output-verification boundaries, isolated from real-media timing variance |
-
-CI (`.github/workflows/ci.yml`) runs the full suite on Python 3.9 and
-3.11, on Ubuntu, macOS, and Windows (6 jobs). `PathPolicy` behavior is
-consistent across all three OSes (drive letters, backslash-absolute
-paths, and reserved device names are rejected regardless of host OS);
-only the Linux job is guaranteed to have `ffmpeg` available for the real
-burn-in tests (they `skip` gracefully elsewhere) — read "CI green" as
-"logic verified everywhere," not as "burn-in verified identically on
-every OS."
-
-<details>
-<summary>Why Python 3.9 is in the CI matrix, not just declared</summary>
-
-`pyproject.toml` declares `requires-python = ">=3.9"`. An earlier version
-of this code wrote files with `Path.write_text(..., newline="")`, whose
-`newline` parameter only exists from Python 3.10 — CI passed anyway
-because it only ran 3.11. Actually running the suite under a real Python
-3.9 interpreter reproduced the failure; the fix writes files via
-`open(path, "w", encoding="utf-8", newline="")` instead (works on 3.9+),
-and 3.9 was added to the CI matrix so the floor version is exercised,
-not just declared.
-
-</details>
-
----
-
-## Documentation
-
-- **This README** — architecture, contract, security, integration.
-- **[`SKILL.md`](SKILL.md)** — the agent-facing usage guide.
-- **`contract --json`** — the authoritative, machine-readable operation/format/error list; if this README and the live contract ever disagree, the contract is correct.
+| [SKILL.md](SKILL.md) | what an agent reads: when to call this skill, building a `SubtitleDocument`, fatal vs. observation, failure handling |
+| `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
+| [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 
 There is no separate `docs/` directory at this time.
 
----
-
 ## Limitations / Out of scope
 
-Not implemented, and not planned as part of this skill's mandate — these
-belong to `video-production-agent` (decision-making) or a dedicated
-skill, not here:
-
+Not implemented, and not this skill's mandate — these belong to
+`video-production-agent` (decision-making) or a dedicated skill:
 automatic transcription, speaker diarization, translation, summarization,
 AI-generated or AI-edited subtitle text, automatic cue splitting,
 automatic subtitle "design" decisions, scene/semantic understanding,
-conference- or domain-specific rules, cloud upload, MCP or plugin-loader
-integration, arbitrary FFmpeg command or filter execution.
+cloud upload, MCP or plugin-loader integration, arbitrary FFmpeg command
+or filter execution.
 
-Not yet implemented, and not currently advertised in `contract --json`
-(so they cannot be called): `convert`, `offset`, `merge`, ASS/SSA
-generation or rendering.
+Not yet implemented, and not advertised in `contract --json`: `convert`,
+`offset`, `merge`, ASS/SSA generation or rendering.
 
 ## License
 
