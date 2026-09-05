@@ -365,7 +365,8 @@ wanted, belongs to whoever is driving the render.
 | Result | Measurement |
 |---|---|
 | **96 / 96** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, and render delegation |
-| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` (kajisho5/ffmpeg-skill, skill version 0.9.1) — not a hand-rolled stub — including a real burn-in verified by `ffprobe` and by asserting ffmpeg-skill's own reported command line used the `subtitles=` filter |
+| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` (kajisho5/ffmpeg-skill, skill version 0.9.2) — not a hand-rolled stub — including a real burn-in verified by `ffprobe` and by asserting ffmpeg-skill's own reported command line used the `subtitles=` filter |
+| **vendor drift checked weekly** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main and diffs it against the vendored copy, separately from normal-PR CI |
 | **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 

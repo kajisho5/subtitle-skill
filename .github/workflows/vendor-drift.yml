@@ -1,0 +1,23 @@
+name: ffmpeg-skill vendor drift check
+
+# Separate from ci.yml on purpose: the main test suite deliberately does
+# not depend on network access to another repository (see CLAUDE.md
+# "Things intentionally NOT done, and why"). This workflow is the
+# non-blocking check for whether tests/fixtures/ffmpeg_skill_vendor/ has
+# silently fallen out of sync with the real ffmpeg-skill main.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compare vendored ffmpeg-skill scripts against real main
+        run: python3 scripts/check_vendor_drift.py

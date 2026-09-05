@@ -53,12 +53,17 @@ do not attempt it from here).
 `render` delegates burn-in to its `caption` tool by invoking
 `scripts/caption.py` directly (there is no single dispatch endpoint in
 ffmpeg-skill — every tool is its own script). Verified against
-`kajisho5/ffmpeg-skill` commit `2abd89c` (skill version 0.9.1); ffmpeg-skill's
-main has since moved to `d27c776` (README redesign only, per that
-commit's title) — re-verify `scripts/caption.py` / `scripts/probe.py`
-/ `scripts/_common.py` against current main before trusting this
-integration blindly in a future session; don't assume it's still
-byte-identical to the vendored test copy forever.
+`kajisho5/ffmpeg-skill` commit `b51dc5e` (package.json version `0.9.2`)
+as of this writing: `caption.py`, `probe.py`, `_common.py` are
+byte-identical to the vendored copy (see
+`tests/fixtures/ffmpeg_skill_vendor/README.md`); `_contract.py` had
+drifted (a `color.py --correct` capability addition, unrelated to
+`caption`/`probe`) and was re-vendored. **This has already moved twice**
+(`2abd89c` → `d27c776` → `b51dc5e`) since this repo's render integration
+was first written — do not assume it is still byte-identical by the
+time you read this either. Run `python3 scripts/check_vendor_drift.py`
+(or check the weekly `vendor-drift.yml` workflow run) before trusting it
+blindly.
 
 ## Capabilities (what this repo actually exposes)
 
@@ -79,22 +84,19 @@ that list that can drift from `contract --json`.
 
 Ordered by value, not urgency:
 
-1. **Vendored ffmpeg-skill test fixture can silently drift.**
-   `tests/fixtures/ffmpeg_skill_vendor/` is a pinned, byte-for-byte copy
-   of ffmpeg-skill's `caption.py`/`probe.py`/`_common.py`/`_contract.py`
-   at commit `2abd89c`. Nothing detects if real ffmpeg-skill main moves
-   on and this copy quietly stops matching it. A periodic CI job (or a
-   pre-release check) that clones current ffmpeg-skill main and diffs
-   those four files against the vendored copy would catch that; not yet
-   built.
-2. **`video-production-agent` integration is unstarted** (see above) —
+1. **`video-production-agent` integration is unstarted** (see above) —
    not this repo's task to fix, but worth re-checking periodically
    whether that repo has moved past its Phase 1 and needs a
    `SubtitleDocument`-shaped `render`/`generate` call added to its
    registry.
-3. **PyPI publication itself** — metadata is ready (see below); nothing
+2. **PyPI publication itself** — metadata is ready (see below); nothing
    has actually been uploaded. Requires a human decision (account,
    namespace, when) — not something to do unilaterally.
+3. **`vendor-drift.yml` is weekly, not on every ffmpeg-skill release** —
+   a same-day re-vendor after a real ffmpeg-skill change to
+   `caption.py`/`probe.py` still needs someone (or a session) to notice
+   and act on the workflow's result; it does not open an issue or PR by
+   itself yet.
 
 ### Done since the gaps above were first written
 
@@ -110,13 +112,23 @@ Ordered by value, not urgency:
   that `install`/`install --all`/`install --uninstall` all work.
   `tests/test_installer.py` also guards the packaged copy against
   drifting from the repo-root `SKILL.md`.
+- **Vendored ffmpeg-skill drift detection**
+  (`scripts/check_vendor_drift.py`, `.github/workflows/vendor-drift.yml`,
+  weekly + manual `workflow_dispatch`) — clones current ffmpeg-skill main
+  and diffs `caption.py`/`probe.py`/`_common.py`/`_contract.py` against
+  the vendored copy; separate from the main `ci.yml` so normal PRs never
+  depend on that network fetch. Already caught one real drift
+  (`_contract.py`, unrelated `color.py --correct` addition) the same
+  session it was built, which was re-vendored immediately (see
+  `tests/fixtures/ffmpeg_skill_vendor/README.md` for the commit history).
 
 ## Things intentionally NOT done, and why
 
-- **No CI job clones ffmpeg-skill main for a live integration test** —
-  would make this repo's CI depend on the availability and stability of
-  another repository's network fetch; the vendored copy (gap #2 above)
-  is the deliberate tradeoff.
+- **No CI job clones ffmpeg-skill main for a live integration test in
+  `ci.yml`** — would make this repo's normal-PR CI depend on the
+  availability and stability of another repository's network fetch; the
+  vendored copy plus the separate, non-blocking `vendor-drift.yml`
+  schedule (see above) is the deliberate tradeoff.
 - **No MCP server, plugin loader, or "OS SDK" exists here** — none of
   those exist in the actual OS repo either (see above); building one
   speculatively would be inventing architecture ahead of the thing it's
