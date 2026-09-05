@@ -8,6 +8,25 @@ version = "0.1.0"
 description = "Deterministic subtitle validation, generation and rendering skill (no AI/production-decision logic)."
 requires-python = ">=3.9"
 readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "kajisho5" }]
+keywords = ["subtitle", "srt", "webvtt", "agent-skill", "ffmpeg", "video", "captions", "deterministic"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Multimedia :: Video",
+  "Topic :: Text Processing :: Markup",
+]
+
+[project.urls]
+Homepage = "https://github.com/kajisho5/subtitle-skill"
+Repository = "https://github.com/kajisho5/subtitle-skill"
+Issues = "https://github.com/kajisho5/subtitle-skill/issues"
 
 [project.scripts]
 subtitle-skill = "subtitle_skill.cli:main"
