@@ -36,18 +36,48 @@ architecture that does not exist — **do not do that**. Treat OS
 integration as VISION-stage until that repository actually contains
 something.
 
-**`kajisho5/video-production-agent` is real but does not call this
-skill yet.** Verified by reading its source (not assumed) as of commit
-`287b685`: `src/video_agent/skills/registry.py`'s `caption_generation`
-`SkillSpec` names `ffmpeg-skill/caption` as its tool candidate directly,
-requires capability `asr:whisper`, and is explicitly commented
-`# declared, not implemented in Phase 1` (i.e. Phase 3, unimplemented).
-There is zero reference to `subtitle-skill` or `SubtitleDocument`
-anywhere in that repository. This is not a bug in either repo — it's
-simply that the integration hasn't been built yet. **subtitle-skill
-cannot fix this from its own side**; the fix is in
-`video-production-agent`'s `registry.py` (out of this repo's authority —
-do not attempt it from here).
+**`kajisho5/video-production-agent` now DOES call this skill.** This
+was NOT true earlier in this repo's history (an earlier version of this
+file, written against `video-production-agent` commit `287b685`,
+recorded "does not call this skill yet" — that is now stale and was
+corrected here after re-reading the real source at commit `d8a6c83`).
+Verified against actual source, not assumed:
+- `src/video_agent/skills/registry.py` declares `subtitle_generation`
+  and `subtitle_burn_in` `SkillSpec`s that target this skill.
+- `src/video_agent/tools/subtitle/locate.py` finds an installed
+  subtitle-skill (a checkout's `src/subtitle_skill` run via
+  `python -m subtitle_skill`, or the `subtitle-skill` console script) —
+  the agent never imports subtitle-skill as a library, only invokes it
+  as a subprocess, matching this repo's CLI-first design.
+- `src/video_agent/tools/subtitle/adapter.py`'s `SubtitleAdapter` runs
+  it as exactly `["subtitle-skill", "run", "-", "--json"]` with the
+  request JSON on stdin — the same invocation shape this repo's own
+  README documents.
+- `src/video_agent/tools/subtitle/contract_0.1.0.json` pins a snapshot
+  of this repo's contract. Diffed byte-for-byte against a live
+  `subtitle-skill contract --json` run in this session: **identical**.
+  If a future contract change here breaks that byte-equality, that pin
+  is the thing that will (rightly) fail on video-production-agent's
+  side — bumping this repo's contract version is a breaking change for
+  a real, verified consumer, not a hypothetical one.
+
+**A real cross-repo compatibility bug was found and fixed this
+session** (see engine.py's `UNKNOWN_ENGINE_VERSION`): the adapter's
+`_check_response()` requires a render response's `engine_version` field
+to be a non-empty string, and treats anything else (including a JSON
+`null`) as `INVALID_RESULT` — a non-retryable failure — rather than a
+render failure. `ffmpeg_skill_version()` used to return `None` (→ JSON
+`null`) whenever the installed ffmpeg-skill had no readable
+`package.json`, which is a legitimate state (e.g. a hand-built or
+vendored install with no npm metadata). That combination meant a
+perfectly successful render could be reported to video-production-agent
+as an unretryable invalid result. Fixed by having
+`ffmpeg_skill_version()` return the literal string `"unknown"` instead
+of `None` in that case — `engine_version` is now guaranteed to always
+be a truthy string on a render response. Covered by
+`tests/test_engine_boundaries.py::test_engine_version_is_never_null_without_package_json`
+and an added assertion in
+`tests/test_engine_render.py::test_render_delegates_to_real_ffmpeg_skill_caption`.
 
 **`kajisho5/ffmpeg-skill` is a real, verified downstream dependency.**
 `render` delegates burn-in to its `caption` tool by invoking
@@ -84,15 +114,10 @@ that list that can drift from `contract --json`.
 
 Ordered by value, not urgency:
 
-1. **`video-production-agent` integration is unstarted** (see above) —
-   not this repo's task to fix, but worth re-checking periodically
-   whether that repo has moved past its Phase 1 and needs a
-   `SubtitleDocument`-shaped `render`/`generate` call added to its
-   registry.
-2. **PyPI publication itself** — metadata is ready (see below); nothing
+1. **PyPI publication itself** — metadata is ready (see below); nothing
    has actually been uploaded. Requires a human decision (account,
    namespace, when) — not something to do unilaterally.
-3. **`vendor-drift.yml` is weekly, not on every ffmpeg-skill release** —
+2. **`vendor-drift.yml` is weekly, not on every ffmpeg-skill release** —
    a same-day re-vendor after a real ffmpeg-skill change to
    `caption.py`/`probe.py` still needs someone (or a session) to notice
    and act on the workflow's result; it does not open an issue or PR by
@@ -100,6 +125,12 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **`video-production-agent` integration** — verified real and working
+  (see above); the pinned contract snapshot matches this repo's contract
+  byte-for-byte, and a real cross-repo `engine_version` compatibility
+  bug found this session has been fixed. No further action needed here
+  unless a future contract-version bump requires coordinating with that
+  repo's pinned snapshot.
 - **Agent Skill installer** (`subtitle-skill install [--claude|--cursor|--codex|--all|--project|--dir PATH] [--uninstall] [--json]`,
   `src/subtitle_skill/installer.py`) — places the packaged `SKILL.md` in
   the standard agent skill directories, mirroring ffmpeg-skill's
@@ -140,7 +171,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 96 tests, `pytest -q`, all passing; CI green on
+At last update: 97 tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.

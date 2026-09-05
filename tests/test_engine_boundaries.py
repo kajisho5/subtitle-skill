@@ -112,3 +112,19 @@ def test_reported_completed_but_no_file_written_rejected(tmp_path, fake_engine):
     with pytest.raises(SubtitleSkillError) as exc:
         _burn_in(tmp_path)
     assert exc.value.code == "OUTPUT_ERROR"
+
+
+def test_engine_version_is_never_null_without_package_json(tmp_path, fake_engine):
+    """A known downstream consumer (video-production-agent's SubtitleAdapter)
+    requires a render response's engine_version to be a non-empty string,
+    treating a JSON null as an invalid result rather than a retryable
+    failure. ffmpeg-skill installs without a package.json (a hand-built
+    scripts/ directory, or this repo's own vendored test fixture) must
+    therefore still produce a truthful, non-empty placeholder.
+    """
+    import subtitle_skill.engine as engine
+
+    root = fake_engine(input_duration=10.0, output_duration=10.0)
+    response = _burn_in(tmp_path)
+    assert response["engine_skill_version"] == engine.UNKNOWN_ENGINE_VERSION
+    assert isinstance(response["engine_skill_version"], str) and response["engine_skill_version"]

@@ -97,6 +97,12 @@ def test_render_delegates_to_real_ffmpeg_skill_caption(tmp_path, ffmpeg_skill_in
     response = execute(_base_request(tmp_path))
     assert response["status"] == "ok"
     assert response["engine"] == "ffmpeg-skill"
+    # engine_version must be a non-empty string even though this vendored
+    # fixture has no package.json -- a real downstream consumer
+    # (video-production-agent's SubtitleAdapter, verified against its
+    # actual source) treats a falsy engine_version on a render response
+    # as an invalid result, not a render failure.
+    assert isinstance(response["engine_version"], str) and response["engine_version"]
 
     out = tmp_path / "out.mp4"
     assert out.exists() and out.stat().st_size > 0

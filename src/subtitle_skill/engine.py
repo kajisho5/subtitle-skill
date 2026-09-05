@@ -101,13 +101,24 @@ def is_available() -> bool:
     return resolve_ffmpeg_skill_root() is not None
 
 
-def ffmpeg_skill_version(root: Path) -> Optional[str]:
+#: Returned by `ffmpeg_skill_version` when ffmpeg-skill's package.json is
+#: missing or unreadable. A known consumer (video-production-agent's
+#: SubtitleAdapter, verified against its actual source) requires a
+#: render response's `engine_version` to be a non-empty string -- it
+#: treats anything else (including a JSON `null`) as an invalid result,
+#: not a render failure worth retrying. Returning this constant instead
+#: of `None` keeps the field truthful (it names exactly what happened --
+#: not a fabricated version number) while never breaking that contract.
+UNKNOWN_ENGINE_VERSION = "unknown"
+
+
+def ffmpeg_skill_version(root: Path) -> str:
     """Read the installed ffmpeg-skill's own version from its package.json,
     for human-readable provenance only. ffmpeg-skill's installer
     (bin/install.js) copies package.json alongside scripts/ into every
     install target; its absence (e.g. a hand-built scripts/ directory, or
-    this repo's own test fixture) is not an error -- provenance just
-    records None.
+    this repo's own test fixture) is not an error -- provenance records
+    `UNKNOWN_ENGINE_VERSION` rather than a missing/null field.
 
     This is deliberately NOT used as the determinism/cache anchor: a
     self-reported version string is only as trustworthy as whoever last
@@ -121,7 +132,7 @@ def ffmpeg_skill_version(root: Path) -> Optional[str]:
         data = json.loads(manifest.read_text(encoding="utf-8"))
         return str(data["version"])
     except (OSError, ValueError, KeyError):
-        return None
+        return UNKNOWN_ENGINE_VERSION
 
 
 def ffmpeg_skill_script_hash(root: Path) -> str:

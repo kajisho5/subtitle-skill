@@ -299,7 +299,10 @@ Every artifact's sidecar and response record how it was produced:
 `skill` / `skill_version` / `contract_version`, `operation`, `sha256`,
 `size`, `reused`, `observation`, `timeline`, and for `render`: `engine`
 (`"ffmpeg-skill"`), `engine_version` (display only — its `package.json`
-version), `engine_script_sha256` (the real identity anchor, above), and
+version, or the literal string `"unknown"` if it has none — always a
+non-empty string, never `null`, since a known consumer treats a falsy
+`engine_version` on a render response as invalid rather than retryable),
+`engine_script_sha256` (the real identity anchor, above), and
 `engine_response` (ffmpeg-skill's own reported `commands` and `probe` —
 always its actual values, never fabricated here).
 
