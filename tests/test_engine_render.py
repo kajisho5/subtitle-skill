@@ -185,10 +185,11 @@ def test_render_missing_video_input_file(tmp_path, ffmpeg_skill_install):
     assert exc.value.code == "MISSING_INPUT"
 
 
-def test_render_identity_changes_when_engine_version_changes(tmp_path, ffmpeg_skill_install):
-    """A cached render must not be reused across an ffmpeg-skill upgrade:
-    a different ffmpeg-skill build can change encoder defaults / output
-    bytes for the same subtitle document and video.
+def test_render_identity_survives_a_version_bump_with_unchanged_script(tmp_path, ffmpeg_skill_install):
+    """A bare package.json version bump, with byte-identical caption.py/
+    _common.py, must NOT invalidate the cache: nothing that actually runs
+    changed. The identity anchor is the executed scripts' content hash,
+    not the self-reported version string (see engine.ffmpeg_skill_script_hash).
     """
     from subtitle_skill.operations import execute
 
@@ -200,13 +201,38 @@ def test_render_identity_changes_when_engine_version_changes(tmp_path, ffmpeg_sk
     assert first["reused"] is False
     assert first["engine_version"] == "0.9.1"
 
+    (ffmpeg_skill_install / "package.json").write_text(json.dumps({"version": "0.9.2"}), encoding="utf-8")
+    second = execute(_base_request(tmp_path))
+    assert second["reused"] is True
+    # a cache hit skips ffmpeg-skill entirely, so the display field is
+    # whatever was recorded at render time, not the current package.json
+    assert second["engine_version"] == "0.9.1"
+
+
+def test_render_identity_changes_when_script_content_changes(tmp_path, ffmpeg_skill_install):
+    """The real bug this guards against: a hand-patched caption.py (or
+    _common.py) with an untouched package.json must still invalidate the
+    cache, because what actually executes is different -- provenance must
+    not be fooled by an unchanged version string.
+    """
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    first = execute(_base_request(tmp_path))
+    assert first["reused"] is False
+
     second = execute(_base_request(tmp_path))
     assert second["reused"] is True
 
-    (ffmpeg_skill_install / "package.json").write_text(json.dumps({"version": "0.9.2"}), encoding="utf-8")
+    # patch _common.py's behavior without touching package.json (there is
+    # none in this fixture) or caption.py itself
+    common_path = ffmpeg_skill_install / "scripts" / "_common.py"
+    common_path.write_text(common_path.read_text(encoding="utf-8") + "\n# patched\n", encoding="utf-8")
+
     third = execute(_base_request(tmp_path))
     assert third["reused"] is False
-    assert third["engine_version"] == "0.9.2"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="fake ffmpeg shell script is not directly runnable on Windows")
@@ -234,3 +260,38 @@ def test_ffmpeg_failure_maps_to_tool_error(tmp_path, ffmpeg_skill_install, monke
     with pytest.raises(SubtitleSkillError) as exc:
         execute(_base_request(tmp_path))
     assert exc.value.code == "TOOL_ERROR"
+
+
+def test_render_rejects_cue_past_real_video_duration_even_without_hint(tmp_path, ffmpeg_skill_install):
+    """The real bug this guards against: request.video_duration is an
+    optional caller hint. If the caller omits it (or gets it wrong), a cue
+    past the actual end of the video must still be caught -- otherwise it
+    renders "successfully" with the caption silently never shown (libass
+    just drops cues past the video's end) and no observation at all.
+    """
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=1.0)  # real duration: 1.0s
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"] = [{"id": "c1", "start": 0.0, "end": 5.0, "text": "past the end of the video"}]
+    # deliberately no request["video_duration"] at all
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "VALIDATION_ERROR"
+
+
+def test_render_accepts_cue_within_real_video_duration_without_hint(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=2.0)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"] = [{"id": "c1", "start": 0.0, "end": 1.5, "text": "within bounds"}]
+
+    response = execute(request)
+    assert response["status"] == "ok"

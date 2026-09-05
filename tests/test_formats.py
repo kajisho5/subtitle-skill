@@ -2,7 +2,27 @@ import pytest
 
 from subtitle_skill.errors import SubtitleSkillError
 from subtitle_skill.formats import generate_srt, generate_vtt
+from subtitle_skill.formats.srt import _format_timestamp as _srt_ts
+from subtitle_skill.formats.vtt import _format_timestamp as _vtt_ts
 from subtitle_skill.models import SubtitleDocument
+
+
+@pytest.mark.parametrize(
+    "seconds,expected_srt,expected_vtt",
+    [
+        (0, "00:00:00,000", "00:00:00.000"),
+        (0.001, "00:00:00,001", "00:00:00.001"),
+        (0.999, "00:00:00,999", "00:00:00.999"),
+        (1.000, "00:00:01,000", "00:00:01.000"),
+        (59.999, "00:00:59,999", "00:00:59.999"),
+        (60.000, "00:01:00,000", "00:01:00.000"),
+        (3599.999, "00:59:59,999", "00:59:59.999"),
+        (3600.000, "01:00:00,000", "01:00:00.000"),
+    ],
+)
+def test_timestamp_rounding_boundaries(seconds, expected_srt, expected_vtt):
+    assert _srt_ts(seconds) == expected_srt
+    assert _vtt_ts(seconds) == expected_vtt
 
 
 def _doc(cues, **kw):

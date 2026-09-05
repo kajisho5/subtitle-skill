@@ -101,7 +101,10 @@ can omit `constraints` entirely.
   ffmpeg-skill's `caption` tool. Requesting `render` with `format: "vtt"`
   fails immediately with `UNSUPPORTED_FORMAT` — do not retry with a
   different format expecting it to work; ffmpeg-skill has no WebVTT
-  support to fall back to.
+  support to fall back to. `render` measures the real video duration
+  itself before rendering and rejects a cue past it — you do not need to
+  (and cannot rely on) passing a correct `video_duration` hint for this;
+  it exists only as an optional, non-authoritative early check.
 
 ## ffmpeg-skill dependency
 

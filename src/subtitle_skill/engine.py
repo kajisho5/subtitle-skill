@@ -32,6 +32,7 @@ Key facts this module depends on:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -40,6 +41,7 @@ from pathlib import Path
 from typing import Optional
 
 from .errors import SubtitleSkillError
+from .provenance import sha256_file
 
 #: Explicit override for the ffmpeg-skill install directory (the directory
 #: that directly contains `scripts/caption.py`). Never taken from a request
@@ -101,10 +103,18 @@ def is_available() -> bool:
 
 def ffmpeg_skill_version(root: Path) -> Optional[str]:
     """Read the installed ffmpeg-skill's own version from its package.json,
-    for provenance. ffmpeg-skill's installer (bin/install.js) copies
-    package.json alongside scripts/ into every install target; its absence
-    (e.g. a hand-built scripts/ directory, or this repo's own test fixture)
-    is not an error -- provenance just records None.
+    for human-readable provenance only. ffmpeg-skill's installer
+    (bin/install.js) copies package.json alongside scripts/ into every
+    install target; its absence (e.g. a hand-built scripts/ directory, or
+    this repo's own test fixture) is not an error -- provenance just
+    records None.
+
+    This is deliberately NOT used as the determinism/cache anchor: a
+    self-reported version string is only as trustworthy as whoever last
+    edited package.json. A hand-patched `scripts/caption.py` with a stale
+    package.json would silently keep reporting the old version. See
+    `ffmpeg_skill_script_hash` for the content-addressed anchor actually
+    used in identity/reuse.
     """
     manifest = root / "package.json"
     try:
@@ -112,6 +122,25 @@ def ffmpeg_skill_version(root: Path) -> Optional[str]:
         return str(data["version"])
     except (OSError, ValueError, KeyError):
         return None
+
+
+def ffmpeg_skill_script_hash(root: Path) -> str:
+    """sha256 of the exact `caption.py` and `_common.py` bytes that will
+    actually be executed (`_common` is imported by `caption.py` and holds
+    the shared ffmpeg invocation logic, so a change there changes behavior
+    too even if `caption.py` itself is untouched).
+
+    This -- not `ffmpeg_skill_version`'s self-reported package.json string
+    -- is what subtitle-skill uses as the render determinism/cache anchor:
+    it changes if and only if the code that will actually run changes,
+    regardless of whether whoever changed it also remembered to bump
+    package.json.
+    """
+    parts = [
+        sha256_file(root / "scripts" / "caption.py"),
+        sha256_file(root / "scripts" / "_common.py"),
+    ]
+    return hashlib.sha256("".join(parts).encode("ascii")).hexdigest()
 
 
 def _run_tool(root: Path, tool: str, argv: list[str], *, timeout_seconds: int) -> dict:
@@ -280,4 +309,5 @@ def burn_in(
 
     response = dict(response)
     response["engine_skill_version"] = ffmpeg_skill_version(root)
+    response["engine_script_sha256"] = ffmpeg_skill_script_hash(root)
     return response

@@ -81,7 +81,15 @@ parameters:
 - `start < 0`, `end <= start`, `NaN`/`Infinity` timestamps
 - duplicate cue ids
 - empty/whitespace-only text, invalid control characters, invalid Unicode
-- a cue extending past a supplied `video_duration`
+- a cue extending past `video_duration`
+
+For `generate`, `video_duration` is only the optional, caller-supplied
+hint in the request (there is no video to measure). For `render`,
+`video_duration` in the request is **not trusted as authoritative** — the
+document is re-validated against ffmpeg-skill's own probed duration of
+the actual video before rendering, so an omitted or wrong
+`video_duration` hint cannot let a cue past the real end of the video
+through silently (see §14).
 
 Reported as `observation` issues but **never auto-corrected** (no cue is
 ever deleted, reordered, merged, or shifted by this skill):
@@ -208,12 +216,22 @@ hygiene alone.
 
 An "identity" hash is computed from: skill version, contract version,
 operation, the full canonical subtitle document, format, constraints,
-and (for `render`) the input video's sha256 **and the resolved
-ffmpeg-skill's own version** (read from its `package.json`, if present) —
-a different ffmpeg-skill build can change encoder defaults/output bytes
-for the same document and video, so an ffmpeg-skill upgrade must not
-serve a stale cached render as if nothing changed. Timestamps, PIDs, and
-temp paths are **never** part of this identity.
+and (for `render`) the input video's sha256 **and a sha256 of the
+ffmpeg-skill scripts that will actually execute**
+(`engine.ffmpeg_skill_script_hash`: `caption.py` + `_common.py`, the
+module it imports for the shared ffmpeg invocation logic). This is
+deliberately a content hash, not ffmpeg-skill's self-reported
+`package.json` version string: a version string is only as trustworthy
+as whoever last edited it, and a hand-patched `caption.py` left next to
+an unbumped `package.json` would otherwise keep reporting the old
+version while behaving differently. The content hash changes if and only
+if the code that will actually run changes — a bare version bump with
+byte-identical scripts does *not* invalidate the cache, and a script edit
+with an unbumped version *does*. `package.json`'s version is kept only as
+a human-readable `engine_version` display field, populated fresh on every
+non-cached render and never re-read from disk on a cache hit (a reused
+render reports whatever was recorded when it was actually rendered).
+Timestamps, PIDs, and temp paths are **never** part of this identity.
 
 On each call, if an output file *and* a matching sidecar
 (`<output>.subtitle-skill.json`) already exist with the same identity,
@@ -227,10 +245,13 @@ Success response (`status: "ok"`) includes: `skill`, `skill_version`,
 `contract_version`, `operation`, `output`, `sha256`, `size`, `reused`,
 `observation` (validation issues, possibly non-empty even on success),
 `timeline` (cue count), `engine` / `engine_version` (render only —
-ffmpeg-skill's own `package.json` version, or `null` if it has none),
-`duration_ms`. The sidecar additionally records `engine_response`:
-ffmpeg-skill's own reported `commands` (the ffmpeg command line it ran)
-and `probe` (its own ffprobe of the output) for audit.
+ffmpeg-skill's own `package.json` version, a human-readable display
+field only, or `null` if it has none), `duration_ms`. The sidecar
+additionally records `engine_script_sha256` (the actual identity anchor,
+§10) and `engine_response`: ffmpeg-skill's own reported `commands` (the
+ffmpeg command line it ran) and `probe` (its own ffprobe of the output)
+for audit — these are always ffmpeg-skill's own reported values, never
+fabricated by subtitle-skill.
 
 A response is only accepted as successful if the output file actually
 exists and is non-empty — process exit code `0` alone is never treated
@@ -290,7 +311,12 @@ into a video. `subtitle_skill.engine`:
    `~/.codex/skills/ffmpeg-skill`, `./.claude/skills/ffmpeg-skill`;
 2. runs `scripts/probe.py <video> --json` on the input first (ffmpeg-skill's
    own "probe first" convention) to confirm it has a video stream and to
-   record its duration;
+   record its *actual* duration — the document is then re-validated
+   against this real, measured duration (not the request's optional
+   `video_duration` hint, which is not trusted for `render`; see §4), so
+   a cue past the real end of the video is rejected as `VALIDATION_ERROR`
+   instead of rendering "successfully" with the caption silently never
+   shown;
 3. runs
    `scripts/caption.py <video> --srt <srt> -o <output> --json`
    — a fixed argv list, `sys.executable` as the interpreter (ffmpeg-skill's
@@ -378,3 +404,18 @@ Test files:
 reserved device names regardless of host OS, so behavior is consistent on
 Linux/macOS/Windows. `pathlib.Path` is used throughout instead of manual
 string path building.
+
+CI runs Python 3.9 and 3.11 on all three OSes (6 jobs) — `requires-python
+= ">=3.9"` in `pyproject.toml` is enforced by actually testing the floor
+version, not just declared. This matters: `Path.write_text(...,
+newline=...)` only exists from Python 3.10 (an earlier version of this
+code used it and passed CI because CI only ran 3.11); subtitle-skill now
+writes files via `open(path, "w", encoding="utf-8", newline="")` instead
+(`operations._write_text_exact`), which has always worked on 3.9+.
+
+Only the `linux` runner has a real-media (`ffmpeg`-backed) verification
+run in this repository's own CI today — `test_engine_render.py`'s render
+tests `pytest.skip` gracefully when `ffmpeg` is not on `PATH`, so a CI
+run without it still reports green, just with less coverage. Do not read
+"CI green on 3 OSes" as "real burn-in verified identically on all 3
+OSes" unless `ffmpeg` is confirmed present on each runner image.

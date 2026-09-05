@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
-from .engine import burn_in, ffmpeg_skill_version, resolve_ffmpeg_skill_root
+from . import engine as engine_module
+from .engine import burn_in, ffmpeg_skill_script_hash, resolve_ffmpeg_skill_root
 from .errors import SubtitleSkillError
 from .formats import GENERATORS, SUPPORTED_FORMATS
 from .models import SubtitleDocument
@@ -62,6 +63,17 @@ def _parse_common(request: Mapping[str, Any]) -> tuple:
     constraints = SubtitleConstraints.from_dict(request.get("constraints"))
 
     return operation, fmt, workspace, output_path, document, constraints
+
+
+def _write_text_exact(path: Path, content: str) -> None:
+    """Write text without newline translation, portably on Python 3.9+.
+
+    `Path.write_text(..., newline=...)` only exists from Python 3.10 (this
+    package declares `requires-python = ">=3.9"`); `open(..., newline="")`
+    has always supported it.
+    """
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
 
 
 def _sidecar_path(output_path: Path) -> Path:
@@ -131,7 +143,7 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
         return _finish(reused, output_path, issues, "generate", reused=True, started=started)
 
     content = GENERATORS[fmt](document)
-    output_path.write_text(content, encoding="utf-8", newline="")
+    _write_text_exact(output_path, content)
 
     sha256 = sha256_file(output_path)
     record = {
@@ -163,19 +175,39 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     video_sha256 = sha256_file(video_path)
     output_path = policy.resolve_output(output_path_rel)
 
-    # ffmpeg-skill's own version is part of the render identity: a different
-    # ffmpeg-skill build can change encoder defaults/output bytes for the
-    # same inputs, so a cached render from a since-upgraded ffmpeg-skill
-    # must not be reused as if nothing changed.
+    # request.video_duration is an optional, caller-supplied hint used by
+    # the generic validation in execute(); it may be absent or wrong. For
+    # render we have the actual video in hand, so re-validate the document
+    # against ffmpeg-skill's own probed duration -- otherwise a cue past
+    # the real end of the video would render silently (libass just never
+    # shows it) with no error and no observation, whenever the caller
+    # omitted or mis-stated video_duration.
     ffmpeg_skill_root = resolve_ffmpeg_skill_root()
-    engine_version = ffmpeg_skill_version(ffmpeg_skill_root) if ffmpeg_skill_root else None
+    if ffmpeg_skill_root is None:
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            f"ffmpeg-skill install not found (checked {engine_module.FFMPEG_SKILL_DIR_ENV} and the standard "
+            "~/.claude, ~/.cursor, ~/.codex and ./.claude skills directories)",
+        )
+    real_video_duration = engine_module.probe(ffmpeg_skill_root, video_path).get("duration")
+    issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
+
+    # The render identity is anchored on the *content* of the ffmpeg-skill
+    # scripts that will actually execute (sha256 of caption.py + _common.py),
+    # not on ffmpeg-skill's self-reported package.json version: a version
+    # string is only as trustworthy as whoever last edited it, and a
+    # hand-patched caption.py with a stale package.json would otherwise
+    # keep reporting the old version while behaving differently. The
+    # content hash changes if and only if the code that will actually run
+    # changes.
+    engine_script_hash = ffmpeg_skill_script_hash(ffmpeg_skill_root)
 
     identity = compute_identity(
         skill_version=SKILL_VERSION,
         contract_version=CONTRACT_VERSION,
         operation="render",
         payload=_identity_payload(
-            document, fmt, constraints, {"video_sha256": video_sha256, "engine_version": engine_version}
+            document, fmt, constraints, {"video_sha256": video_sha256, "engine_script_sha256": engine_script_hash}
         ),
     )
 
@@ -194,7 +226,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
 
     subtitle_content = GENERATORS[fmt](document)
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{fmt}")
-    subtitle_tmp_path.write_text(subtitle_content, encoding="utf-8", newline="")
+    _write_text_exact(subtitle_tmp_path, subtitle_content)
 
     try:
         engine_response = burn_in(
@@ -218,7 +250,12 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         "cue_count": len(document.cues),
         "engine": "ffmpeg-skill",
         "engine_version": engine_response.get("engine_skill_version"),
-        "engine_response": {k: v for k, v in engine_response.items() if k not in ("status", "engine_skill_version")},
+        "engine_script_sha256": engine_response.get("engine_script_sha256"),
+        "engine_response": {
+            k: v
+            for k, v in engine_response.items()
+            if k not in ("status", "engine_skill_version", "engine_script_sha256")
+        },
     }
     _write_sidecar(output_path, record)
     return _finish(
