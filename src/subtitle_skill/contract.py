@@ -8,6 +8,18 @@ from .formats import SUPPORTED_FORMATS
 
 OPERATIONS = ("generate", "render")
 
+# Cross-repository Capability ids (kajisho5/AI-video-production-OS docs/SPEC.md
+# `CapabilityContract.provides`), so a registry can resolve "who provides
+# subtitle.generate" without hardcoding this repository. Unlike video-editing-skill's
+# `operations.OPERATIONS`, this repo's own OPERATIONS tuple carries no capability-shaped
+# id today, so this is a new naming decision, not a mechanical derivation - it matches
+# the id already assigned to these two operations in that project's own
+# docs/CAPABILITY_MATRIX.md, kept here as the single source of truth going forward.
+PROVIDES = {
+    "generate": "subtitle.generate",
+    "render": "subtitle.render",
+}
+
 
 def build_contract() -> dict:
     return {
@@ -34,6 +46,10 @@ def build_contract() -> dict:
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
             },
         },
+        "provides": [
+            {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{SKILL_ID}/{op}"}
+            for op in OPERATIONS
+        ],
         "capabilities": {
             "formats": list(SUPPORTED_FORMATS),
             "render_formats": list(RENDER_SUPPORTED_FORMATS),
