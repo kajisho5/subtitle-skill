@@ -34,6 +34,19 @@ def test_contract_json_shape():
     assert data["skill_id"] == "subtitle-skill"
 
 
+def test_contract_exposes_render_mode_and_audio_stream(tmp_path):
+    """subtitle-skill#3 fix B: render's --mode mux / --audio-stream / language
+    forwarding must be discoverable in the machine-readable contract, not just
+    something the caller has to already know to send."""
+    proc = run_cli(["contract", "--json"])
+    data = json.loads(proc.stdout)
+    assert set(data["capabilities"]["render_modes"]) == {"burn", "mux"}
+    assert "mode?" in data["operations"]["render"]["inputs"]
+    assert "audio_stream?" in data["operations"]["render"]["inputs"]
+    assert "mode" in data["parameters"]["render"]
+    assert "audio_stream" in data["parameters"]["render"]
+
+
 def test_doctor_json_shape():
     proc = run_cli(["doctor", "--json"])
     data = json.loads(proc.stdout)

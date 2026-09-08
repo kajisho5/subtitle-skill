@@ -171,6 +171,33 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     if not isinstance(video_input_rel, str) or not video_input_rel:
         raise SubtitleSkillError("MISSING_INPUT", "request.video_input is required for the render operation")
 
+    # request.mode selects ffmpeg-skill/caption's own --mode: "burn" (default,
+    # renders pixels into the picture) or "mux" (copies video/audio untouched,
+    # adds the SRT as a soft, player-toggleable subtitle stream). Validated
+    # here, not left to caption.py's argparse `choices`, because an invalid
+    # choices value there exits non-zero with a plain-text usage error on
+    # stderr and no JSON at all -- this would otherwise surface as an opaque
+    # DEPENDENCY_ERROR instead of a caller-actionable INVALID_INPUT.
+    mode = request.get("mode", "burn")
+    if mode not in engine_module.ALLOWED_RENDER_MODES:
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"request.mode must be one of {sorted(engine_module.ALLOWED_RENDER_MODES)}, got {mode!r}"
+        )
+
+    # request.audio_stream selects which 0-based audio track of a
+    # multi-track input (dubbed languages, M&E stems) caption.py keeps
+    # (--audio-stream N, ffmpeg-skill 0.12.0+). Only the type is validated
+    # here; whether the value is actually in range for this video is
+    # caption.py's own job (it probes the input and rejects an out-of-range
+    # value as an INVALID_INPUT-mapped "kind": "input" failure).
+    audio_stream = request.get("audio_stream")
+    if audio_stream is not None and (
+        isinstance(audio_stream, bool) or not isinstance(audio_stream, int) or audio_stream < 0
+    ):
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"request.audio_stream must be a non-negative integer, got {audio_stream!r}"
+        )
+
     video_path = policy.resolve_input(video_input_rel)
     video_sha256 = sha256_file(video_path)
     output_path = policy.resolve_output(output_path_rel)
@@ -207,7 +234,18 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         contract_version=CONTRACT_VERSION,
         operation="render",
         payload=_identity_payload(
-            document, fmt, constraints, {"video_sha256": video_sha256, "engine_script_sha256": engine_script_hash}
+            document,
+            fmt,
+            constraints,
+            {
+                "video_sha256": video_sha256,
+                "engine_script_sha256": engine_script_hash,
+                # mode/audio_stream change the actual caption.py argv (and
+                # therefore the output) even for the same document/video, so
+                # they must invalidate a cache hit like everything else here.
+                "mode": mode,
+                "audio_stream": audio_stream,
+            },
         ),
     )
 
@@ -222,6 +260,10 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             started=started,
             engine="ffmpeg-skill",
             engine_version=reused.get("engine_version"),
+            # older sidecars predate the mode field; "burn" was the only
+            # behavior that ever ran before it existed, so it is the honest
+            # default rather than a fabricated guess.
+            mode=reused.get("mode", "burn"),
         )
 
     subtitle_content = GENERATORS[fmt](document)
@@ -234,6 +276,14 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             subtitle_path=subtitle_tmp_path,
             subtitle_format=fmt,
             output_path=output_path,
+            mode=mode,
+            audio_stream=audio_stream,
+            # SubtitleDocument.language is required and BCP47-validated by
+            # models.py but was previously never read downstream; forwarded
+            # here as caption.py's --mode mux language tag (--language is a
+            # no-op for --mode burn, so it is only sent for mux -- see
+            # engine.burn_in's docstring).
+            language=document.language,
         )
     finally:
         subtitle_tmp_path.unlink(missing_ok=True)
@@ -245,6 +295,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         "skill_version": SKILL_VERSION,
         "operation": "render",
         "format": fmt,
+        "mode": mode,
+        "audio_stream": audio_stream,
         "sha256": sha256,
         "size": output_path.stat().st_size,
         "cue_count": len(document.cues),
@@ -267,6 +319,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         started=started,
         engine="ffmpeg-skill",
         engine_version=record["engine_version"],
+        mode=mode,
     )
 
 
@@ -280,6 +333,7 @@ def _finish(
     started: float,
     engine: Optional[str] = None,
     engine_version: Optional[str] = None,
+    mode: Optional[str] = None,
 ) -> dict:
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise SubtitleSkillError("OUTPUT_ERROR", "output file is missing or empty after execution")
@@ -303,4 +357,5 @@ def _finish(
     if engine is not None:
         response["engine"] = engine
         response["engine_version"] = engine_version
+        response["mode"] = mode
     return response
