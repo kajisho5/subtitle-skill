@@ -107,7 +107,11 @@ subtitle-skill run request.json --json
 Burning that same subtitle into a video — `"operation": "render"` —
 needs `format: "srt"` and a reachable ffmpeg-skill install (see
 [ffmpeg-skill integration](#ffmpeg-skill-integration)); the request
-shape is identical otherwise, just add `video_input`.
+shape is identical otherwise, just add `video_input`. Add
+`"mode": "mux"` instead of the default `"burn"` for a soft, toggleable
+subtitle track rather than pixels burned into the picture, and
+`"audio_stream": 1` (0-based) to pick a non-default audio track on a
+multi-track input — see [Operations](#operations).
 
 ## How it works
 
@@ -184,7 +188,13 @@ cannot be called.
 | Operation | Video I/O | Formats | What it does |
 |---|---|---|---|
 | `generate` | none | SRT, WebVTT | Validate the document, write a subtitle file |
-| `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in to ffmpeg-skill's `caption` tool, verify the output |
+| `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in (or mux) to ffmpeg-skill's `caption` tool, verify the output |
+
+`render`'s `mode` (default `"burn"`, or `"mux"`) and `audio_stream`
+(0-based, optional) map directly onto ffmpeg-skill `caption.py`'s own
+`--mode`/`--audio-stream` flags — see
+[ffmpeg-skill integration](#ffmpeg-skill-integration) for exactly what
+each does and `subtitle.language`'s forwarding as the mux language tag.
 
 `contract --json` also publishes `provides`: `generate` as Capability id
 `subtitle.generate`, `render` as `subtitle.render` — the cross-repository
@@ -200,6 +210,8 @@ either operation.
   "output_path": "relative/output.srt",
   "video_input": "relative/input.mp4",
   "video_duration": 123.4,
+  "mode": "burn | mux",
+  "audio_stream": 0,
   "subtitle": {
     "id": "doc-1", "language": "ja",
     "cues": [{"id": "c1", "start": 0.0, "end": 2.0, "text": "...", "speaker": "A", "style": {"align": "center"}}]
@@ -208,8 +220,10 @@ either operation.
 }
 ```
 
-`video_input` / `video_duration` apply to `render` only; `constraints`
-is optional for both (see [Validation](#validation-is-not-cosmetic)).
+`video_input` / `video_duration` / `mode` / `audio_stream` apply to
+`render` only (`mode` defaults to `"burn"`; `audio_stream` defaults to
+caption.py's own default, track 0); `constraints` is optional for both
+(see [Validation](#validation-is-not-cosmetic)).
 
 ## Format support
 
@@ -350,11 +364,41 @@ python3 <ffmpeg-skill-install-dir>/scripts/<tool>.py [args] --json
    `./.claude/skills/ffmpeg-skill`);
 2. runs `scripts/probe.py <video> --json` first, to confirm a video
    stream exists and measure the *actual* duration for validation;
-3. runs `scripts/caption.py <video> --srt <srt> -o <output> --json` — a
-   fixed argv list, never a shell;
+3. runs `scripts/caption.py <video> --srt <srt> -o <output> [--mode mux]
+   [--audio-stream N] [--language <lang>] --json` — a fixed argv list,
+   never a shell. `--mode mux` is added only when `request.mode ==
+   "mux"` (the default, `"burn"`, sends no `--mode` flag at all, matching
+   caption.py's own default); `--audio-stream` only when
+   `request.audio_stream` is given; `--language` only alongside `--mode
+   mux` (caption.py's `--language` also feeds `--transcribe`, which
+   subtitle-skill never uses, so it is otherwise omitted) and only when
+   `subtitle.language` is non-empty;
 4. accepts the result only when exit code `0`, `"status": "completed"`,
    a non-empty output file, a `probe.video` in the response, and an
-   output duration within 0.25s of the input's — all hold.
+   output duration within 0.25s of the input's — all hold, for both
+   `mode`s (`--mode mux` copies video/audio untouched, so the duration
+   check still applies and still passes).
+
+`mode: "mux"` is a real, distinct behavior from the default `"burn"`,
+not a variant of it: `caption.py --mode mux` copies the input's video
+and audio streams byte-for-byte and adds the SRT as a separate,
+player-toggleable subtitle stream, rather than rendering the text into
+the picture. `audio_stream` (0-based) selects which audio track of a
+multi-track input `caption.py` keeps, for either mode — caption.py
+itself probes the input and rejects an out-of-range value (mapped to
+`INVALID_INPUT` here, like any other `kind: "input"` failure).
+`subtitle.language` — required and BCP47-validated by `models.py`, but
+otherwise never read — is forwarded as `--language` only for `mode:
+"mux"`, tagging the newly added subtitle stream's language metadata
+(`-metadata:s:s:N language=...`, built by caption.py itself). That value
+is forwarded exactly as given, not normalized: confirmed directly
+against real ffmpeg, `.mp4`/`.m4v`/`.mov` output (`mov_text`, the codec
+`caption.py` picks for those extensions) silently drops a language tag
+that is not a 3-letter ISO 639-2 code — a plain 2-letter BCP47 tag like
+`"ja"`/`"en"` can vanish from that container's stream tags with no
+error, warning, or non-zero exit anywhere in the chain, while `.mkv`
+(`srt`) and `.webm` (`webvtt`) output write the same value verbatim.
+Pick `.mkv`/`.webm` output when the exact tag value must survive.
 
 Failure responses follow ffmpeg-skill's own shape —
 `{"status": "failed", "error": {"kind": "input"|"ffmpeg"|"missing_tool", "message": "..."}}`
@@ -373,8 +417,8 @@ wanted, belongs to whoever is driving the render.
 
 | Result | Measurement |
 |---|---|
-| **96 / 96** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, and render delegation |
-| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` (kajisho5/ffmpeg-skill, skill version 0.9.2) — not a hand-rolled stub — including a real burn-in verified by `ffprobe` and by asserting ffmpeg-skill's own reported command line used the `subtitles=` filter |
+| **111 / 111** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, and render delegation (burn and mux) |
+| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` / `_contract.py` (kajisho5/ffmpeg-skill, skill version 0.12.2) — not a hand-rolled stub — including a real burn-in and a real mux, each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux) |
 | **vendor drift checked weekly** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main and diffs it against the vendored copy, separately from normal-PR CI |
 | **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |

@@ -105,6 +105,25 @@ can omit `constraints` entirely.
   itself before rendering and rejects a cue past it — you do not need to
   (and cannot rely on) passing a correct `video_duration` hint for this;
   it exists only as an optional, non-authoritative early check.
+  - `mode` (optional, default `"burn"`): `"burn"` renders subtitles into
+    the picture; `"mux"` copies the video/audio streams untouched and
+    adds the SRT as a separate, player-toggleable subtitle stream
+    instead. Pick `"mux"` when the caller wants a soft/removable
+    subtitle track (e.g. building a multi-language set by rendering once
+    per language into the same growing container) rather than a
+    permanently burned-in one.
+  - `audio_stream` (optional, 0-based integer): which audio track of a
+    multi-track input (dubbed languages, M&E stems) to keep, for either
+    mode. An out-of-range value is rejected as `INVALID_INPUT` — this
+    skill does not guess which track you meant.
+  - `subtitle.language` is forwarded as the new subtitle stream's
+    language tag when `mode: "mux"` (a no-op for `"burn"`, which has no
+    subtitle stream to tag). It is forwarded exactly as given, not
+    normalized — a `.mp4`/`.mov` output's `mov_text` codec only honors a
+    3-letter ISO 639-2 code there (confirmed against real ffmpeg, not
+    assumed); a plain 2-letter BCP47 tag like `"ja"`/`"en"` can be
+    silently dropped from that container's stream tags with no error.
+    Use `.mkv`/`.webm` output when the exact tag value must survive.
 
 ## ffmpeg-skill dependency
 

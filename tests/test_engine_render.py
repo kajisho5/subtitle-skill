@@ -45,6 +45,33 @@ def _make_tiny_video(path: Path, duration: float = 1.0) -> None:
     )
 
 
+def _make_video_with_audio_streams(path: Path, n: int, duration: float = 1.0) -> None:
+    """A video with `n` distinct-frequency audio tracks, so --audio-stream N
+    selecting a real, distinguishable track can be verified end to end."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("real ffmpeg is required for render tests (ffmpeg-skill/caption always needs it)")
+    cmd = [ffmpeg, "-y", "-f", "lavfi", "-i", f"color=c=blue:s=64x64:d={duration}"]
+    for i in range(n):
+        cmd += ["-f", "lavfi", "-i", f"sine=frequency={440 * (i + 1)}:duration={duration}"]
+    cmd += ["-map", "0:v"]
+    for i in range(n):
+        cmd += ["-map", f"{i + 1}:a"]
+    cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(path)]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _ffprobe_streams(path: Path) -> list:
+    ffprobe = shutil.which("ffprobe")
+    proc = subprocess.run(
+        [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(proc.stdout)["streams"]
+
+
 def _base_request(tmp_path, output_path="out.mp4"):
     return {
         "operation": "render",
@@ -301,3 +328,231 @@ def test_render_accepts_cue_within_real_video_duration_without_hint(tmp_path, ff
 
     response = execute(request)
     assert response["status"] == "ok"
+
+
+# --- mode="mux", audio_stream, and document.language forwarding (subtitle-skill#3 fix B) ---
+# Exercised against the re-vendored real caption.py (0.12.2, subtitle-skill#3 fix A), which is
+# where --mode mux / --audio-stream / mux's --language tagging actually live.
+
+
+def test_render_mux_mode_adds_a_soft_toggleable_subtitle_stream(tmp_path, ffmpeg_skill_install):
+    """mode="mux" must not burn pixels: it must add a separate, player-toggleable
+    subtitle stream and leave the video/audio streams themselves untouched."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=1.0)
+
+    request = _base_request(tmp_path)
+    request["mode"] = "mux"
+
+    response = execute(request)
+    assert response["status"] == "ok"
+    assert response["mode"] == "mux"
+
+    out = tmp_path / "out.mp4"
+    streams = _ffprobe_streams(out)
+    subtitle_streams = [s for s in streams if s["codec_type"] == "subtitle"]
+    assert len(subtitle_streams) == 1
+    # .mp4 output -> mux_subtitle_codec() picks mov_text (see caption.py)
+    assert subtitle_streams[0]["codec_name"] == "mov_text"
+    video_streams = [s for s in streams if s["codec_type"] == "video"]
+    assert len(video_streams) == 1
+
+
+def test_render_mux_mode_forwards_document_language_as_the_subtitle_tag(tmp_path, ffmpeg_skill_install):
+    """SubtitleDocument.language is required and BCP47-validated (models.py) but was
+    previously never read downstream (subtitle-skill#3). render with mode="mux" must
+    now forward it as the newly added subtitle stream's language metadata tag.
+
+    Output container is .mkv, not .mp4, here: confirmed directly against the real
+    ffmpeg binary in this environment that the MOV/MP4 muxer (mov_text, caption.py's
+    codec choice for .mp4/.m4v/.mov) silently drops a `-metadata:s:s:N language=...`
+    value that isn't a 3-letter ISO 639-2 code -- a plain 2-letter BCP47 tag like
+    "ja"/"en" (exactly what subtitle-skill's own `_is_bcp47_ish` accepts and what
+    real callers will send) is accepted by caption.py and by ffmpeg (exit 0, no
+    warning) but never actually lands in the .mp4's stream tags. Matroska's muxer
+    writes whatever string it's given verbatim, so it isolates subtitle-skill's own
+    forwarding logic (what this test is actually about) from that unrelated MOV/MP4
+    muxer quirk. subtitle-skill does not normalize/reject the language value -- it
+    forwards exactly what the document says, matching its "no editorial decisions"
+    mandate -- so a caller who needs the tag to actually persist in an .mp4/.mov
+    output should pass a 3-letter code, or use .mkv/.webm.
+    """
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=1.0)
+
+    request = _base_request(tmp_path, output_path="out.mkv")
+    request["mode"] = "mux"
+    request["subtitle"]["language"] = "ja"
+
+    response = execute(request)
+    assert response["status"] == "ok"
+
+    out = tmp_path / "out.mkv"
+    subtitle_streams = [s for s in _ffprobe_streams(out) if s["codec_type"] == "subtitle"]
+    assert len(subtitle_streams) == 1
+    assert subtitle_streams[0].get("tags", {}).get("language") == "ja"
+
+
+def test_render_burn_mode_does_not_tag_a_language(tmp_path, ffmpeg_skill_install):
+    """--language only means something for --mode mux (or --transcribe, which
+    subtitle-skill never uses); a plain burn-mode render must not send it, and the
+    output (all pixels, no subtitle stream at all) has nowhere to tag it anyway."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=1.0)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["language"] = "ja"  # default mode is "burn"
+
+    response = execute(request)
+    assert response["status"] == "ok"
+    assert response["mode"] == "burn"
+
+    out = tmp_path / "out.mp4"
+    subtitle_streams = [s for s in _ffprobe_streams(out) if s["codec_type"] == "subtitle"]
+    assert subtitle_streams == []
+
+
+def test_engine_burn_in_mode_mux_uses_the_mode_flag_not_the_subtitles_filter(tmp_path, ffmpeg_skill_install):
+    """Confirm the real caption.py command line, not just the resulting file:
+    --mode mux must appear, and the burn-mode `subtitles=` video filter must not."""
+    import subtitle_skill.engine as engine_module
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+    output_path = tmp_path / "out.mp4"
+    srt_path = tmp_path / "cues.srt"
+    srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello world\n\n", encoding="utf-8")
+
+    response = engine_module.burn_in(
+        video_path=video_path,
+        subtitle_path=srt_path,
+        subtitle_format="srt",
+        output_path=output_path,
+        mode="mux",
+        language="en",
+    )
+    commands = response.get("commands", [])
+    assert commands, "ffmpeg-skill/caption reported no ffmpeg command line"
+    assert any("mov_text" in c for c in commands)
+    assert not any("subtitles=" in c for c in commands)
+    assert any("language=en" in c for c in commands)
+
+
+def test_engine_burn_in_audio_stream_is_forwarded_to_the_real_command_line(tmp_path, ffmpeg_skill_install):
+    """--audio-stream N must select the requested 0-based track, verified against
+    ffmpeg-skill's own reported command line on a real multi-audio-track input."""
+    import subtitle_skill.engine as engine_module
+
+    video_path = tmp_path / "in.mp4"
+    _make_video_with_audio_streams(video_path, n=2)
+    output_path = tmp_path / "out.mp4"
+    srt_path = tmp_path / "cues.srt"
+    srt_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello world\n\n", encoding="utf-8")
+
+    response = engine_module.burn_in(
+        video_path=video_path,
+        subtitle_path=srt_path,
+        subtitle_format="srt",
+        output_path=output_path,
+        audio_stream=1,
+    )
+    commands = response.get("commands", [])
+    assert commands
+    assert any("0:a:1" in c for c in commands)
+    assert not any("0:a:0" in c for c in commands)
+
+
+def test_render_audio_stream_selects_the_requested_track_end_to_end(tmp_path, ffmpeg_skill_install):
+    """Same as above, but through the full request/response path (subtitle_skill.operations.execute)
+    rather than calling engine.burn_in directly."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_video_with_audio_streams(video_path, n=2)
+
+    request = _base_request(tmp_path)
+    request["audio_stream"] = 1
+
+    response = execute(request)
+    assert response["status"] == "ok"
+
+    out = tmp_path / "out.mp4"
+    audio_streams = [s for s in _ffprobe_streams(out) if s["codec_type"] == "audio"]
+    assert len(audio_streams) == 1  # only the requested track is kept
+
+
+def test_render_audio_stream_out_of_range_is_invalid_input(tmp_path, ffmpeg_skill_install):
+    """caption.py itself probes the input and rejects an out-of-range --audio-stream
+    as kind="input"; that must map to subtitle-skill's INVALID_INPUT, not a generic
+    DEPENDENCY_ERROR or TOOL_ERROR."""
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_video_with_audio_streams(video_path, n=1)
+
+    request = _base_request(tmp_path)
+    request["audio_stream"] = 5
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "INVALID_INPUT"
+
+
+def test_render_invalid_mode_rejected_before_touching_ffmpeg_skill(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["mode"] = "reencode-everything"  # not a real caption.py --mode choice
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "INVALID_INPUT"
+    assert not (tmp_path / "out.mp4").exists()
+
+
+@pytest.mark.parametrize("bad_audio_stream", [-1, "0", 1.5, True])
+def test_render_invalid_audio_stream_type_rejected(tmp_path, ffmpeg_skill_install, bad_audio_stream):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["audio_stream"] = bad_audio_stream
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "INVALID_INPUT"
+
+
+def test_render_identity_differs_between_burn_and_mux_mode(tmp_path, ffmpeg_skill_install):
+    """The same document/video rendered with mode="burn" then mode="mux" must NOT be
+    treated as a cache hit -- they are different outputs (pixels vs. a soft track)."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    burn_request = _base_request(tmp_path)
+    first = execute(burn_request)
+    assert first["reused"] is False
+    assert first["mode"] == "burn"
+
+    mux_request = _base_request(tmp_path)
+    mux_request["mode"] = "mux"
+    second = execute(mux_request)
+    assert second["reused"] is False
+    assert second["mode"] == "mux"
+    assert first["sha256"] != second["sha256"]

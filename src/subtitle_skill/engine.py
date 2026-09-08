@@ -8,18 +8,25 @@ run with a fixed argv list (no shell=True, no user-controlled executable,
 argv, filter or env).
 
 This module's shape was verified against kajisho5/ffmpeg-skill (commit
-2abd89c, contract_version "1.0", skill version 0.9.1) -- specifically
-`docs/contract.md`, `scripts/_contract.py`, `scripts/caption.py` and
-`scripts/_common.py` -- and confirmed by actually running
-`scripts/caption.py` and `scripts/probe.py` against a real video, not by
-assumption. See README "ffmpeg-skill integration" for the citations.
+336e0c4d6311d2407daaa529ad71fee641f59b37, contract_version "1.0", skill
+version 0.12.2) -- specifically `docs/contract.md`, `scripts/_contract.py`,
+`scripts/caption.py` and `scripts/_common.py` -- and confirmed by actually
+running `scripts/caption.py` and `scripts/probe.py` against a real video,
+not by assumption. See README "ffmpeg-skill integration" for the
+citations. (Previously verified against commit 2abd89c / skill version
+0.9.1; re-verified after re-vendoring for kajisho5/subtitle-skill#3 --
+`caption.py` gained `--mode mux` and `--audio-stream` in the interim,
+both now wired through `burn_in()` below.)
 
 Key facts this module depends on:
 - there is no "ffmpeg-skill run" or single dispatch endpoint; each tool is
   its own script (`scripts/<tool>.py`), invoked as
   `python3 <ffmpeg-skill-dir>/scripts/<tool>.py [args] --json`.
 - `caption.py` burns SRT or ASS files, never WebVTT. subtitle-skill's
-  `render` operation therefore only supports format="srt".
+  `render` operation therefore only supports format="srt". It can burn
+  the SRT into the picture (`--mode burn`, the default) or mux it in as a
+  soft, toggleable subtitle stream (`--mode mux`) untouched otherwise;
+  both take only SRT (`--mode mux --ass` is refused by caption.py itself).
 - success prints `{"status": "completed", "output", "dry_run", "commands",
   "probe": {...}}` on stdout with exit 0; failure prints
   `{"status": "failed", "error": {"kind": "input"|"ffmpeg"|"missing_tool",
@@ -61,11 +68,20 @@ _ERROR_KIND_TO_CODE = {
     "ffmpeg": "TOOL_ERROR",
 }
 
+#: `caption.py --mode {burn,mux}` (argparse `choices`, ffmpeg-skill 0.11.0+).
+#: An invalid mode is rejected here, before ever invoking caption.py: argparse
+#: choices errors go to stderr with exit code 2 and print no JSON at all, so
+#: letting a bad value reach caption.py would surface as an opaque
+#: DEPENDENCY_ERROR ("did not print a JSON document") instead of a clear,
+#: caller-actionable INVALID_INPUT.
+ALLOWED_RENDER_MODES = frozenset({"burn", "mux"})
+
 
 def _candidate_install_roots() -> list[Path]:
     """Directories ffmpeg-skill's own installer (bin/install.js) writes to.
 
-    Verified against ffmpeg-skill 0.9.1's `bin/install.js` target table:
+    Verified against ffmpeg-skill 0.9.1's `bin/install.js` target table
+    (re-checked at 0.12.2 -- the target table is unchanged):
     `~/.claude/skills`, `~/.cursor/skills`, `~/.codex/skills` (per-agent
     global installs) and `./.claude/skills` (its `--project` mode).
     """
@@ -264,19 +280,60 @@ def burn_in(
     subtitle_path: Path,
     subtitle_format: str,
     output_path: Path,
+    mode: str = "burn",
+    audio_stream: Optional[int] = None,
+    language: Optional[str] = None,
     timeout_seconds: int = 600,
 ) -> dict:
-    """Delegate subtitle burn-in to ffmpeg-skill's `caption` tool.
+    """Delegate subtitle burn-in (or soft-mux) to ffmpeg-skill's `caption` tool.
 
     Only `srt` is accepted: ffmpeg-skill's `caption.py` burns SRT or ASS
     files, never WebVTT (`--srt` / `--ass`; there is no `--vtt`), confirmed
-    from its argparse parser, not assumed.
+    from its argparse parser, not assumed. This holds for both `mode`
+    values -- `--mode mux` additionally refuses `--ass` on caption.py's own
+    side (no soft-subtitle equivalent for ASS styling), but subtitle-skill
+    never sends `--ass` in the first place, so that path is unreachable here.
+
+    `mode="mux"` copies the input's video and audio streams untouched and
+    adds the SRT as a separate, player-toggleable subtitle stream instead of
+    rendering it into the picture -- `caption.py --mode mux` (ffmpeg-skill
+    0.11.0+). `audio_stream`, when given, selects which 0-based audio track
+    of a multi-track input (dubbed languages, M&E stems) caption.py keeps
+    (`--audio-stream N`; ffmpeg-skill 0.12.0+, closing ffmpeg-skill#55) --
+    caption.py itself validates it against the input's actual track count
+    and rejects an out-of-range value as `kind: "input"`. `language`, when
+    given with `mode="mux"`, is forwarded as `--language` and tagged onto
+    the newly added subtitle stream's metadata (`-metadata:s:s:N
+    language=...`) -- caption.py's own `--language` also feeds `--transcribe`,
+    which subtitle-skill never uses, so this is mux-only here.
+
+    Not enforced or normalized here: `language` is forwarded exactly as the
+    document states it (subtitle-skill makes no editorial decisions), but a
+    real MOV/MP4 muxer quirk confirmed directly against ffmpeg -- not
+    assumed -- means it may not actually end up in the output's stream tags
+    for every container. caption.py picks the mux subtitle codec (and thus
+    which muxer receives the metadata) from the output extension: `.mkv`
+    (`srt`) and `.webm` (`webvtt`) write whatever string `--language` is
+    given verbatim, but `.mp4`/`.m4v`/`.mov` (`mov_text`) silently drop a
+    `-metadata:s:s:N language=...` value that is not a 3-letter ISO 639-2
+    code -- a plain 2-letter BCP47 tag like "ja"/"en" (exactly what
+    `SubtitleDocument.language`'s own `_is_bcp47_ish` accepts, and what a
+    real caller is likely to send) is silently lost from an .mp4/.mov
+    output with no error, warning, or non-zero exit anywhere in the chain.
     """
     if subtitle_format != "srt":
         raise SubtitleSkillError(
             "UNSUPPORTED_FORMAT",
             f"render only supports format='srt' (ffmpeg-skill/caption burns SRT or ASS, never {subtitle_format!r})",
         )
+
+    if mode not in ALLOWED_RENDER_MODES:
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"mode must be one of {sorted(ALLOWED_RENDER_MODES)}, got {mode!r}"
+        )
+
+    if audio_stream is not None and (isinstance(audio_stream, bool) or not isinstance(audio_stream, int) or audio_stream < 0):
+        raise SubtitleSkillError("INVALID_INPUT", f"audio_stream must be a non-negative integer, got {audio_stream!r}")
 
     root = resolve_ffmpeg_skill_root()
     if root is None:
@@ -291,10 +348,18 @@ def burn_in(
         raise SubtitleSkillError("INVALID_INPUT", f"input has no video stream: {video_path}")
     input_duration = input_probe.get("duration")
 
+    argv = [str(video_path), "--srt", str(subtitle_path), "-o", str(output_path)]
+    if mode != "burn":
+        argv += ["--mode", mode]
+    if audio_stream is not None:
+        argv += ["--audio-stream", str(audio_stream)]
+    if mode == "mux" and language:
+        argv += ["--language", language]
+
     response = _run_tool(
         root,
         "caption",
-        [str(video_path), "--srt", str(subtitle_path), "-o", str(output_path)],
+        argv,
         timeout_seconds=timeout_seconds,
     )
 

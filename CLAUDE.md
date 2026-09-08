@@ -80,20 +80,59 @@ and an added assertion in
 `tests/test_engine_render.py::test_render_delegates_to_real_ffmpeg_skill_caption`.
 
 **`kajisho5/ffmpeg-skill` is a real, verified downstream dependency.**
-`render` delegates burn-in to its `caption` tool by invoking
+`render` delegates burn-in (or mux) to its `caption` tool by invoking
 `scripts/caption.py` directly (there is no single dispatch endpoint in
 ffmpeg-skill — every tool is its own script). Verified against
-`kajisho5/ffmpeg-skill` commit `b51dc5e` (package.json version `0.9.2`)
-as of this writing: `caption.py`, `probe.py`, `_common.py` are
-byte-identical to the vendored copy (see
-`tests/fixtures/ffmpeg_skill_vendor/README.md`); `_contract.py` had
-drifted (a `color.py --correct` capability addition, unrelated to
-`caption`/`probe`) and was re-vendored. **This has already moved twice**
-(`2abd89c` → `d27c776` → `b51dc5e`) since this repo's render integration
-was first written — do not assume it is still byte-identical by the
-time you read this either. Run `python3 scripts/check_vendor_drift.py`
-(or check the weekly `vendor-drift.yml` workflow run) before trusting it
-blindly.
+`kajisho5/ffmpeg-skill` commit `336e0c4d6311d2407daaa529ad71fee641f59b37`
+(package.json version `0.12.2`) as of this writing, re-vendored to close
+[subtitle-skill#3](https://github.com/kajisho5/subtitle-skill/issues/3):
+`probe.py` is still byte-identical to the previous pin, but `caption.py`
+and `_common.py` — the files `subtitle_skill.engine` actually invokes —
+are NOT: `caption.py` gained `--mode mux`, `--audio-stream N`, and
+SMPTE timecode support for `--text` cues since the last pin (`b51dc5e`,
+v0.9.2); `_common.py` gained the shared helpers those need plus
+unrelated stream-preservation fixes. **This jump skipped three
+intermediate feature releases** (0.10.0-0.12.1) that went unnoticed
+between sessions — the exact failure mode the old text of this section
+predicted ("vendor-drift.yml is weekly... does not open an issue or PR
+by itself yet", still true, see Known gaps below). Pin history:
+`2abd89c` (v0.9.1) → `b51dc5e` (v0.9.2, `_contract.py`-only drift) →
+`336e0c4d` (v0.12.2, `caption.py`+`_common.py` drift, this session). Do
+not assume it is still byte-identical by the time you read this either
+— run `python3 scripts/check_vendor_drift.py` (or check the weekly
+`vendor-drift.yml` workflow run) before trusting it blindly.
+
+**`render` now exposes `caption.py`'s mux/audio-track capabilities
+instead of hardcoding burn-only** (subtitle-skill#3 fix B, same session
+as the re-vendor above — the re-vendor is what made these reachable to
+test against in the first place). `engine.burn_in()` no longer builds a
+fixed 4-token argv:
+- `mode` (request field, default `"burn"`; validated against
+  `engine.ALLOWED_RENDER_MODES` before ever reaching caption.py, since
+  an invalid `--mode` choice there exits non-zero with a plain-text
+  argparse error and no JSON at all) — `"mux"` adds `--mode mux`,
+  producing a soft/toggleable subtitle track instead of burned-in
+  pixels.
+- `audio_stream` (request field, optional 0-based int) — threaded as
+  `--audio-stream N` for either mode; type-checked here, range-checked
+  by caption.py itself against the real input (mapped to
+  `INVALID_INPUT`).
+- `SubtitleDocument.language` — required and BCP47-validated by
+  `models.py` since before this session, but never read by anything
+  downstream until now — is forwarded as `--language` (mux-only;
+  caption.py's own `--language` also feeds `--transcribe`, which
+  subtitle-skill never uses). **Real caveat found by actually running
+  it, not assumed:** `.mp4`/`.mov` output's `mov_text` mux codec
+  silently drops a language tag that is not a 3-letter ISO 639-2 code —
+  a plain 2-letter BCP47 tag like `"ja"`/`"en"` (exactly what
+  `SubtitleDocument.language` validates and what a real caller sends)
+  can vanish from that container's stream tags with ffmpeg still
+  exiting 0. `.mkv`/`.webm` output writes the same value verbatim. See
+  `engine.burn_in`'s docstring and README "ffmpeg-skill integration" for
+  the full citation; `tests/test_engine_render.py`'s mux tests exercise
+  this against the real (now-current) vendored `caption.py`, and the
+  language-tag test deliberately uses `.mkv` output to isolate
+  subtitle-skill's own forwarding logic from that muxer quirk.
 
 ## Capabilities (what this repo actually exposes)
 
@@ -121,9 +160,33 @@ Ordered by value, not urgency:
    a same-day re-vendor after a real ffmpeg-skill change to
    `caption.py`/`probe.py` still needs someone (or a session) to notice
    and act on the workflow's result; it does not open an issue or PR by
-   itself yet.
+   itself yet. **This is not hypothetical** — three ffmpeg-skill feature
+   releases (0.10.0-0.12.1) passed unnoticed before this session's
+   re-vendor (subtitle-skill#3) caught it.
+3. **No SMPTE timecode cue support in `render`** — ffmpeg-skill 0.12.x's
+   `caption.py --text` accepts `hh:mm:ss:ff` SMPTE non-drop-frame
+   timecode cues (`parse_time(fps=...)`/`fmt_smpte_time()`, closing
+   ffmpeg-skill#54) when `--fps` (or the input's own fps) is known;
+   `SubtitleCue.start`/`end` here are decimal seconds only, with no
+   analog. Broadcast/EDL callers must do their own frame-to-seconds math
+   before building a `SubtitleDocument`. Deliberately out of scope for
+   subtitle-skill#3 (fix C in that issue is the cross-repo
+   `subtitle.burn`-vs-`subtitle.render` ownership question, not this);
+   noted here as the next real capability gap once someone decides this
+   skill's typed cue model should grow a `fps` concept.
 
 ### Done since the gaps above were first written
+
+- **`render` exposes ffmpeg-skill/caption's mux mode, audio-track
+  selection, and language tagging** (subtitle-skill#3 fix B) — `mode:
+  "mux"` (soft/toggleable subtitle track, vs. the default `"burn"`),
+  `audio_stream` (0-based multi-track selection), and
+  `SubtitleDocument.language` forwarded as the mux language tag (mux
+  only; previously validated but never read anywhere). See the
+  ffmpeg-skill dependency section above for the real MOV/MP4
+  language-tag caveat this surfaced. Covered by new tests in
+  `tests/test_engine_render.py` against the re-vendored real
+  `caption.py`.
 
 - **`video-production-agent` integration** — verified real and working
   (see above); the pinned contract snapshot matches this repo's contract
@@ -148,10 +211,14 @@ Ordered by value, not urgency:
   weekly + manual `workflow_dispatch`) — clones current ffmpeg-skill main
   and diffs `caption.py`/`probe.py`/`_common.py`/`_contract.py` against
   the vendored copy; separate from the main `ci.yml` so normal PRs never
-  depend on that network fetch. Already caught one real drift
-  (`_contract.py`, unrelated `color.py --correct` addition) the same
-  session it was built, which was re-vendored immediately (see
-  `tests/fixtures/ffmpeg_skill_vendor/README.md` for the commit history).
+  depend on that network fetch. Caught two real drifts so far: first
+  `_contract.py` only (unrelated `color.py --correct` addition, re-vendored
+  same session), then a much larger one (`caption.py`+`_common.py`,
+  0.9.2 → 0.12.2, three releases stale, subtitle-skill#3) re-vendored
+  this session alongside the `mode`/`audio_stream`/`language` fix above
+  (see `tests/fixtures/ffmpeg_skill_vendor/README.md` for the full commit
+  history). The detector itself is doing its job — it is the "notice and
+  act on it" half (gap #2 above) that keeps lagging.
 
 ## Things intentionally NOT done, and why
 
@@ -171,7 +238,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 97 tests, `pytest -q`, all passing; CI green on
+At last update: 111 tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.
