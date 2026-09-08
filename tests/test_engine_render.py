@@ -556,3 +556,209 @@ def test_render_identity_differs_between_burn_and_mux_mode(tmp_path, ffmpeg_skil
     assert second["reused"] is False
     assert second["mode"] == "mux"
     assert first["sha256"] != second["sha256"]
+
+
+# --- SubtitleStyle wiring: color/bold/size -> caption.py, against the real
+# vendored caption.py (kajisho5/subtitle-skill#5) ----------------------------
+# execute()'s own response never carries the raw ffmpeg command line, but
+# _write_sidecar persists the full render record -- including engine_response
+# (which does carry caption.py's own reported "commands") -- to
+# "<output>.subtitle-skill.json"; reading that sidecar is how these tests see
+# the real, real caption.py-reported force_style string end to end, the same
+# ground truth test_render_command_actually_used_the_subtitles_filter uses via
+# a direct engine.burn_in() call.
+
+
+def _sidecar_commands(output_path: Path) -> list:
+    sidecar = output_path.with_name(output_path.name + ".subtitle-skill.json")
+    record = json.loads(sidecar.read_text(encoding="utf-8"))
+    return record["engine_response"]["commands"]
+
+
+def _ass_color(hex_rgb: str, alpha: int = 0) -> str:
+    """Mirrors caption.py's own ass_color() exactly (BGR-swapped ASS hex),
+    so tests can assert on the real force_style string caption.py builds."""
+    h = hex_rgb.lstrip("#")
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H{alpha:02X}{b}{g}{r}".upper()
+
+
+def test_render_burn_forwards_color_and_bold_into_the_real_force_style(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"][0]["style"] = {"color": "00FF00", "bold": True}
+
+    response = execute(request)
+    assert response["status"] == "ok"
+
+    commands = _sidecar_commands(tmp_path / "out.mp4")
+    assert commands
+    assert any(f"PrimaryColour={_ass_color('00FF00')}" in c for c in commands)
+    assert any("Bold=-1" in c for c in commands)
+
+
+def test_render_burn_forwards_size_as_percent_of_288_points(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"][0]["style"] = {"size": 50}  # -> round(50/100*288) == 144
+
+    response = execute(request)
+    assert response["status"] == "ok"
+
+    commands = _sidecar_commands(tmp_path / "out.mp4")
+    assert any("FontSize=144" in c for c in commands)
+
+
+def test_render_burn_unstyled_document_produces_the_same_default_force_style(tmp_path, ffmpeg_skill_install):
+    """The regression guard at the full execute() level: a document with no
+    style anywhere must still get caption.py's own unmodified defaults."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    response = execute(_base_request(tmp_path))
+    assert response["status"] == "ok"
+
+    commands = _sidecar_commands(tmp_path / "out.mp4")
+    assert any("FontSize=24" in c for c in commands)  # caption.py's own default
+    assert any("Bold=0" in c for c in commands)
+    assert any(f"PrimaryColour={_ass_color('FFFFFF')}" in c for c in commands)  # caption.py's own default
+
+
+def test_render_burn_uniform_style_across_multiple_cues_is_forwarded_once(tmp_path, ffmpeg_skill_install):
+    """Two cues that AGREE on style.color is the one non-conflicting
+    multi-cue case -- caption.py's single force_style call represents it
+    losslessly, so this must succeed (not be treated as a conflict)."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=2.0)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"] = [
+        {"id": "c1", "start": 0.0, "end": 1.0, "text": "one", "style": {"color": "ABCDEF"}},
+        {"id": "c2", "start": 1.0, "end": 2.0, "text": "two", "style": {"color": "ABCDEF"}},
+    ]
+
+    response = execute(request)
+    assert response["status"] == "ok"
+    commands = _sidecar_commands(tmp_path / "out.mp4")
+    assert any(f"PrimaryColour={_ass_color('ABCDEF')}" in c for c in commands)
+
+
+def test_render_burn_rejects_conflicting_per_cue_color(tmp_path, ffmpeg_skill_install):
+    """caption.py's --color is a single, whole-burn setting -- a document
+    that asks for two different colors on two different cues cannot be
+    represented by one render call, and must be rejected, not silently
+    resolved by picking one cue's value and dropping the other's request."""
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=2.0)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"] = [
+        {"id": "c1", "start": 0.0, "end": 1.0, "text": "one", "style": {"color": "FF0000"}},
+        {"id": "c2", "start": 1.0, "end": 2.0, "text": "two", "style": {"color": "00FF00"}},
+    ]
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "INVALID_INPUT"
+    assert not (tmp_path / "out.mp4").exists()
+
+
+def test_render_burn_rejects_conflicting_per_cue_bold_and_size(tmp_path, ffmpeg_skill_install):
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path, duration=2.0)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"] = [
+        {"id": "c1", "start": 0.0, "end": 1.0, "text": "one", "style": {"bold": True}},
+        {"id": "c2", "start": 1.0, "end": 2.0, "text": "two", "style": {"bold": False}},
+    ]
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "INVALID_INPUT"
+
+    request2 = _base_request(tmp_path, output_path="out2.mp4")
+    request2["subtitle"]["cues"] = [
+        {"id": "c1", "start": 0.0, "end": 1.0, "text": "one", "style": {"size": 10}},
+        {"id": "c2", "start": 1.0, "end": 2.0, "text": "two", "style": {"size": 20}},
+    ]
+    with pytest.raises(SubtitleSkillError) as exc2:
+        execute(request2)
+    assert exc2.value.code == "INVALID_INPUT"
+
+
+def test_render_mux_mode_rejects_color_and_size_instead_of_silently_ignoring(tmp_path, ffmpeg_skill_install):
+    """caption.py's own docs: styling has no effect for mode="mux". Rather
+    than silently accepting style.color/size and having them do nothing,
+    render must reject the mismatch up front (UNSUPPORTED_FORMAT, from
+    generate_srt's own field-support check) -- the same "never silently
+    drop style" rule the plain SRT generator already enforces."""
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["mode"] = "mux"
+    request["subtitle"]["cues"][0]["style"] = {"color": "00FF00"}
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(request)
+    assert exc.value.code == "UNSUPPORTED_FORMAT"
+
+
+def test_render_burn_rejects_align_position_line_same_as_generate(tmp_path, ffmpeg_skill_install):
+    """align/position/line get no exemption for render even though
+    color/size do -- caption.py has no equivalent for them either, in
+    either mode (see engine._style_argv's docstring)."""
+    from subtitle_skill.operations import execute
+    from subtitle_skill.errors import SubtitleSkillError
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    for field, value in (("align", "center"), ("position", 50), ("line", 10)):
+        request = _base_request(tmp_path, output_path=f"out_{field}.mp4")
+        request["subtitle"]["cues"][0]["style"] = {field: value}
+        with pytest.raises(SubtitleSkillError) as exc:
+            execute(request)
+        assert exc.value.code == "UNSUPPORTED_FORMAT"
+
+
+def test_render_burn_italic_still_renders_via_the_inline_srt_tag(tmp_path, ffmpeg_skill_install):
+    """italic has no caption.py flag at all (see engine._style_argv's
+    docstring) but formats.generate_srt already wraps italic cue text in
+    <i>...</i>, which libass's subtitles filter honors independent of
+    force_style -- confirm that mechanism is untouched by this change: an
+    italic-only style renders (no error) and adds no force_style argv."""
+    from subtitle_skill.operations import execute
+
+    video_path = tmp_path / "in.mp4"
+    _make_tiny_video(video_path)
+
+    request = _base_request(tmp_path)
+    request["subtitle"]["cues"][0]["style"] = {"italic": True}
+
+    response = execute(request)
+    assert response["status"] == "ok"
+
+    commands = _sidecar_commands(tmp_path / "out.mp4")
+    assert any("subtitles=" in c for c in commands)

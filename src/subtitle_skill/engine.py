@@ -18,6 +18,48 @@ citations. (Previously verified against commit 2abd89c / skill version
 `caption.py` gained `--mode mux` and `--audio-stream` in the interim,
 both now wired through `burn_in()` below.)
 
+`SubtitleStyle` wiring (kajisho5/subtitle-skill#5) -- what is and isn't
+forwarded, and why, verified against caption.py's real argparse
+definitions and force_style construction (not assumed):
+- `color` -> `--color` (forwarded verbatim; caption.py's own `color_hex()`
+  normalises `"#RRGGBB"`/`"RRGGBB"`/`"0xRRGGBB"` and fails cleanly, as a
+  `kind: "input"` JSON error mapped to INVALID_INPUT, on anything else --
+  models.py does not itself validate the string's format).
+- `bold` -> `--bold` when `True` (an `action="store_true"` flag with no
+  `--no-bold` counterpart; `False`/`None` both omit it, which is
+  caption.py's own default, so this is unambiguous).
+- `size` (0..100 percent per models.py, percent of no stated dimension) ->
+  `--size <points>`, converted as `points = round(size / 100 * 288)`.
+  caption.py's own `--size` help text says its unit is "ASS points
+  relative to a 288p script height, scales automatically" -- confirmed by
+  actually burning the same `--size` value into two real videos of
+  different heights (288p and 576p) and measuring the rendered glyph's
+  pixel height in each: it scaled proportionally with the real video
+  height, exactly as advertised, for this exact code path (plain SRT +
+  force_style, not just the separate `--write-ass`/`--animate` path that
+  scales explicitly in code). Interpreting `size` as percent of that same
+  288-line nominal baseline is therefore the one conversion that lines up
+  with a number caption.py's own author already chose as this flag's
+  vocabulary -- not an arbitrary formula.
+- `align`, `position`, `line`, `italic` -- deliberately NOT forwarded; see
+  `_style_argv`'s docstring for the exact reasoning per field (no
+  `--align` flag exists at all; `--position`'s named-anchor vocabulary is
+  not a lossless target for `align` or for `position`/`line`'s percent
+  coordinates; `italic` has no force_style key in caption.py's SRT-burn
+  path). Also see `formats.srt`'s `generate_srt` for `align`/`position`/
+  `line` still being rejected with `UNSUPPORTED_FORMAT` for `render` (not
+  silently dropped) -- only `color`/`size` get an SRT-generation exemption
+  for `mode="burn"`, because those two are actually conveyed by
+  caption.py's own flags rather than by anything inside the SRT file.
+- caption.py's force_style is a single, whole-burn setting -- there is no
+  per-cue equivalent. `SubtitleStyle` is a per-cue field in this model, so
+  `operations._run_render` (not this module) is what reduces a document's
+  cue styles down to the single `color`/`bold`/`size` triple forwarded
+  here, requiring every cue that sets a given field to agree on its value
+  and refusing (INVALID_INPUT) rather than guessing when they don't.
+  `style=None` here (no cue set any of the three fields) reproduces the
+  exact argv this module built before subtitle-skill#5.
+
 Key facts this module depends on:
 - there is no "ffmpeg-skill run" or single dispatch endpoint; each tool is
   its own script (`scripts/<tool>.py`), invoked as
@@ -41,6 +83,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -48,6 +91,7 @@ from pathlib import Path
 from typing import Optional
 
 from .errors import SubtitleSkillError
+from .models import SubtitleStyle
 from .provenance import sha256_file
 
 #: Explicit override for the ffmpeg-skill install directory (the directory
@@ -274,6 +318,89 @@ def probe(root: Path, media_path: Path, *, timeout_seconds: int = 120) -> dict:
     return doc
 
 
+#: caption.py's own `--size` baseline (see `_style_argv` and this module's
+#: docstring for the empirical verification): its plain-SRT force_style
+#: path renders FontSize against libass's classic default script
+#: resolution of 288 lines when no PlayResY is given, then auto-scales to
+#: the real video height -- the exact behavior its help text describes.
+_ASS_SCRIPT_HEIGHT = 288
+
+
+def _style_argv(style: SubtitleStyle) -> list[str]:
+    """Translate the subset of `SubtitleStyle` that caption.py's plain-SRT
+    force_style burn can actually represent into argv, validating the
+    type of each field actually forwarded (a shelled-out subprocess must
+    never receive a non-str argv element, and models.py itself does not
+    validate these fields' types beyond `align`).
+
+    Deliberately NOT forwarded, and why (see also this module's docstring,
+    README "ffmpeg-skill integration", and SKILL.md):
+    - `align` (`"left"`/`"center"`/`"right"`, pure horizontal text
+      justification): caption.py has no `--align` flag distinct from
+      `--position` (confirmed from its argparse parser -- the "style"
+      argument group has exactly one placement flag). `--position`'s own
+      vocabulary (`ALIGN` in caption.py: bottom / top / center /
+      bottom-left / bottom-right / top-left / top-right) is not a lossless
+      superset of `align` either: it conflates horizontal justification
+      with vertical anchor, and its `"center"` means the screen's dead
+      center (ASS Alignment 5), not "bottom, center-justified" (Alignment
+      2, caption.py's own default) -- so a naive `align="center"` ->
+      `--position center` mapping would silently also relocate the
+      caption to mid-frame, a side effect `align` never asked for. There
+      is no honest way to pick a single `--position` bucket from `align`
+      alone without inventing that kind of side effect.
+    - `position` / `line` (0..100 percent, from-left / from-top
+      coordinates): caption.py has no numeric or percent-based placement
+      at all for an SRT burn -- only the same seven named anchors above,
+      plus one uniform `--margin` (not per-axis). There is no
+      percent-to-bucket formula that does not throw away the caller's
+      actual number.
+    - `italic`: caption.py's plain-SRT force_style string (its
+      non-`--ass`/`--text` code path) never includes an `Italic=` key at
+      all -- only `Bold=` is exposed there (confirmed by reading that
+      exact force_style construction). There is no flag to wire this to.
+      In practice this is a smaller gap than it looks: `formats.generate_srt`
+      already wraps a cue's text in `<i>...</i>` when `style.italic` is
+      set, and libass honors that inline SRT tag independent of
+      force_style -- so per-cue italic already renders correctly today,
+      just not via anything this function forwards.
+    """
+    argv: list[str] = []
+
+    if style.color is not None:
+        if not isinstance(style.color, str) or not style.color.strip():
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"style.color must be a non-empty string, got {style.color!r}"
+            )
+        # Forwarded verbatim, not re-validated as hex here: caption.py's own
+        # color_hex() normalises "#RRGGBB"/"RRGGBB"/"0xRRGGBB" and fails
+        # cleanly (kind: "input", mapped to INVALID_INPUT by _run_tool) on
+        # anything else, so duplicating that format check here would only
+        # add a second, possibly-divergent copy of logic caption.py owns.
+        argv += ["--color", style.color]
+
+    if style.bold is not None:
+        if not isinstance(style.bold, bool):
+            raise SubtitleSkillError("INVALID_INPUT", f"style.bold must be a boolean, got {style.bold!r}")
+        if style.bold:
+            argv.append("--bold")
+
+    if style.size is not None:
+        if (
+            isinstance(style.size, bool)
+            or not isinstance(style.size, (int, float))
+            or not math.isfinite(style.size)
+            or style.size <= 0
+        ):
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"style.size must be a positive number, got {style.size!r}"
+            )
+        points = round(style.size / 100.0 * _ASS_SCRIPT_HEIGHT)
+        argv += ["--size", str(max(points, 1))]
+
+    return argv
+
+
 def burn_in(
     *,
     video_path: Path,
@@ -283,6 +410,7 @@ def burn_in(
     mode: str = "burn",
     audio_stream: Optional[int] = None,
     language: Optional[str] = None,
+    style: Optional[SubtitleStyle] = None,
     timeout_seconds: int = 600,
 ) -> dict:
     """Delegate subtitle burn-in (or soft-mux) to ffmpeg-skill's `caption` tool.
@@ -320,6 +448,22 @@ def burn_in(
     `SubtitleDocument.language`'s own `_is_bcp47_ish` accepts, and what a
     real caller is likely to send) is silently lost from an .mp4/.mov
     output with no error, warning, or non-zero exit anywhere in the chain.
+
+    `style`, when given, is only ever applied for `mode="burn"` -- ffmpeg-
+    skill's `caption.py` itself documents that styling has no meaning for a
+    soft-muxed subtitle stream, so it is silently a no-op for `mode="mux"`
+    here rather than an error (mirroring `language` being burn-mode's own
+    no-op the other way around). Only `style.color`/`style.bold`/
+    `style.size` are ever translated into argv (`--color`/`--bold`/
+    `--size`) -- see `_style_argv`'s docstring and this module's own
+    docstring for exactly what each maps to, the `size` percent-to-points
+    formula, and which `SubtitleStyle` fields (`align`, `position`, `line`,
+    `italic`) have no caption.py equivalent and are never forwarded. This
+    function does not itself reconcile differing per-cue styles into one
+    document-wide value -- that reduction (and its own INVALID_INPUT on a
+    genuine conflict) is `operations._run_render`'s job, since only it has
+    the document's cues; `style` here is already the single, resolved
+    value to forward, or `None`.
     """
     if subtitle_format != "srt":
         raise SubtitleSkillError(
@@ -334,6 +478,9 @@ def burn_in(
 
     if audio_stream is not None and (isinstance(audio_stream, bool) or not isinstance(audio_stream, int) or audio_stream < 0):
         raise SubtitleSkillError("INVALID_INPUT", f"audio_stream must be a non-negative integer, got {audio_stream!r}")
+
+    if style is not None and not isinstance(style, SubtitleStyle):
+        raise SubtitleSkillError("INVALID_INPUT", f"style must be a SubtitleStyle or None, got {type(style).__name__}")
 
     root = resolve_ffmpeg_skill_root()
     if root is None:
@@ -355,6 +502,8 @@ def burn_in(
         argv += ["--audio-stream", str(audio_stream)]
     if mode == "mux" and language:
         argv += ["--language", language]
+    if mode == "burn" and style is not None:
+        argv += _style_argv(style)
 
     response = _run_tool(
         root,

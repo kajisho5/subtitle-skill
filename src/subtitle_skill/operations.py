@@ -19,8 +19,8 @@ from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from . import engine as engine_module
 from .engine import burn_in, ffmpeg_skill_script_hash, resolve_ffmpeg_skill_root
 from .errors import SubtitleSkillError
-from .formats import GENERATORS, SUPPORTED_FORMATS
-from .models import SubtitleDocument
+from .formats import GENERATORS, SUPPORTED_FORMATS, generate_srt
+from .models import SubtitleDocument, SubtitleStyle
 from .pathpolicy import PathPolicy
 from .provenance import canonical_json, compute_identity, sha256_file
 from .security import reject_forbidden_keys
@@ -160,6 +160,39 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
     return _finish(record, output_path, issues, "generate", reused=False, started=started)
 
 
+def _document_wide_style_value(document: SubtitleDocument, field: str):
+    """Collect the one value cue-level `style.<field>` must agree on across
+    `document` to be forwarded as a single ffmpeg-skill/caption flag.
+
+    Cues without a `style`, or with `style.<field>` left `None`, are simply
+    not opinions about this field and are skipped. If every cue that *does*
+    set `<field>` agrees, that value is returned (or `None` if no cue set
+    it at all). If they disagree, this raises rather than picking one --
+    caption.py's `--color`/`--bold`/`--size` apply to the whole burn, so a
+    document that genuinely wants different values on different cues
+    cannot be represented by a single `render` call at all, and silently
+    honoring only one cue's request while dropping the others would
+    misrepresent what the render actually did.
+    """
+    seen: dict = {}
+    for cue in document.cues:
+        if cue.style is None:
+            continue
+        value = getattr(cue.style, field)
+        if value is None:
+            continue
+        seen.setdefault(value, []).append(cue.id)
+    if len(seen) > 1:
+        detail = ", ".join(f"{value!r} (cue {', '.join(cue_ids)})" for value, cue_ids in seen.items())
+        raise SubtitleSkillError(
+            "INVALID_INPUT",
+            f"render burn cannot represent differing cue-level style.{field} values in a single "
+            f"ffmpeg-skill/caption invocation (its --color/--bold/--size force_style applies to "
+            f"the whole burn, not per cue): {detail}",
+        )
+    return next(iter(seen), None)
+
+
 def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started) -> dict:
     if fmt != "srt":
         raise SubtitleSkillError(
@@ -197,6 +230,23 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         raise SubtitleSkillError(
             "INVALID_INPUT", f"request.audio_stream must be a non-negative integer, got {audio_stream!r}"
         )
+
+    # ffmpeg-skill/caption's --color/--bold/--size are a single, whole-burn
+    # force_style setting -- there is no per-cue equivalent -- but
+    # SubtitleStyle is a per-cue field on this skill's own document model
+    # (kajisho5/subtitle-skill#5). Reduce it to the one document-wide value
+    # each field will actually have, requiring every cue that sets a given
+    # field to agree; a real disagreement is reported, never guessed at by
+    # picking one cue's value and silently dropping the rest. Only
+    # meaningful for mode="burn" -- caption.py's own docs say styling has no
+    # effect on a soft-muxed stream, so mode="mux" does not even look.
+    effective_style: Optional[SubtitleStyle] = None
+    if mode == "burn":
+        color = _document_wide_style_value(document, "color")
+        bold = _document_wide_style_value(document, "bold")
+        size = _document_wide_style_value(document, "size")
+        if color is not None or bold is not None or size is not None:
+            effective_style = SubtitleStyle(color=color, bold=bold, size=size)
 
     video_path = policy.resolve_input(video_input_rel)
     video_sha256 = sha256_file(video_path)
@@ -266,7 +316,17 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             mode=reused.get("mode", "burn"),
         )
 
-    subtitle_content = GENERATORS[fmt](document)
+    # render's own SRT gets a narrow exemption from generate_srt's normal
+    # "SRT can't represent this" rejection: for mode="burn", color/size are
+    # actually conveyed by caption.py's own --color/--size flags below, not
+    # by anything inside this SRT file, so rejecting them here would block
+    # a render that will actually work. mode="mux" gets none of it (styling
+    # has no effect there, so requesting it is worth rejecting up front,
+    # not silently ignoring), and align/position/line are never exempted
+    # for either mode -- burn has no equivalent for those either. See
+    # formats.srt.generate_srt's docstring.
+    allow_style_fields = frozenset({"color", "size"}) if mode == "burn" else frozenset()
+    subtitle_content = generate_srt(document, allow_style_fields=allow_style_fields)
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{fmt}")
     _write_text_exact(subtitle_tmp_path, subtitle_content)
 
@@ -284,6 +344,9 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             # no-op for --mode burn, so it is only sent for mux -- see
             # engine.burn_in's docstring).
             language=document.language,
+            # The document-wide color/bold/size reduction computed above
+            # (None for mode="mux", or when no cue set any of the three).
+            style=effective_style,
         )
     finally:
         subtitle_tmp_path.unlink(missing_ok=True)

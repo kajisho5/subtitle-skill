@@ -43,7 +43,12 @@ def build_contract() -> dict:
                     "caption tool burns SRT or ASS, never WebVTT. `mode: \"mux\"` copies the "
                     "video/audio streams untouched and forwards `subtitle.language` as the new "
                     "subtitle stream's language tag; `audio_stream` selects which 0-based audio "
-                    "track of a multi-track input is kept, for either mode."
+                    "track of a multi-track input is kept, for either mode. For `mode: \"burn\"` "
+                    "only, cue `style.color`/`style.bold`/`style.size` are forwarded to "
+                    "caption.py's own `--color`/`--bold`/`--size` (a single, whole-burn setting, "
+                    "so every cue that sets one of these fields must agree on its value); "
+                    "`style.align`/`style.position`/`style.line`/`style.italic` have no "
+                    "caption.py equivalent and are never forwarded."
                 ),
                 "inputs": [
                     "video_input",

@@ -251,6 +251,14 @@ Neither generator silently drops style it can't represent — it raises
 Cue/document `metadata` is auxiliary/provenance data — never written
 into the rendered subtitle body of either format.
 
+**This table describes the SRT/WebVTT text files themselves** — what a
+plain subtitle file can and can't encode on its own. `render`'s actual
+*burn* additionally forwards a subset of `style` to ffmpeg-skill's
+`caption` tool as its own flags (a completely separate mechanism from
+anything inside the SRT file) — see
+[What SubtitleStyle forwards to caption.py](#what-subtitlestyle-forwards-to-captionpy)
+below for exactly what.
+
 ## Validation is not cosmetic
 
 Fatal and observation are separate systems, not a severity slider:
@@ -365,14 +373,19 @@ python3 <ffmpeg-skill-install-dir>/scripts/<tool>.py [args] --json
 2. runs `scripts/probe.py <video> --json` first, to confirm a video
    stream exists and measure the *actual* duration for validation;
 3. runs `scripts/caption.py <video> --srt <srt> -o <output> [--mode mux]
-   [--audio-stream N] [--language <lang>] --json` — a fixed argv list,
-   never a shell. `--mode mux` is added only when `request.mode ==
-   "mux"` (the default, `"burn"`, sends no `--mode` flag at all, matching
-   caption.py's own default); `--audio-stream` only when
-   `request.audio_stream` is given; `--language` only alongside `--mode
-   mux` (caption.py's `--language` also feeds `--transcribe`, which
-   subtitle-skill never uses, so it is otherwise omitted) and only when
-   `subtitle.language` is non-empty;
+   [--audio-stream N] [--language <lang>] [--color RRGGBB] [--bold]
+   [--size N] --json` — a fixed argv list, never a shell. `--mode mux` is
+   added only when `request.mode == "mux"` (the default, `"burn"`, sends
+   no `--mode` flag at all, matching caption.py's own default);
+   `--audio-stream` only when `request.audio_stream` is given;
+   `--language` only alongside `--mode mux` (caption.py's `--language`
+   also feeds `--transcribe`, which subtitle-skill never uses, so it is
+   otherwise omitted) and only when `subtitle.language` is non-empty;
+   `--color`/`--bold`/`--size` only for `mode: "burn"` and only for
+   whichever of `style.color`/`style.bold`/`style.size` the document
+   actually sets — see
+   [What SubtitleStyle forwards to caption.py](#what-subtitlestyle-forwards-to-captionpy)
+   below;
 4. accepts the result only when exit code `0`, `"status": "completed"`,
    a non-empty output file, a `probe.video` in the response, and an
    output duration within 0.25s of the input's — all hold, for both
@@ -400,6 +413,42 @@ error, warning, or non-zero exit anywhere in the chain, while `.mkv`
 (`srt`) and `.webm` (`webvtt`) output write the same value verbatim.
 Pick `.mkv`/`.webm` output when the exact tag value must survive.
 
+### What SubtitleStyle forwards to caption.py
+
+`SubtitleStyle` (`align`, `position`, `line`, `size`, `bold`, `italic`,
+`color`) is a **per-cue** field on this skill's own document model.
+ffmpeg-skill's `caption.py` styling, in contrast, is a **single,
+whole-burn** `force_style` setting applied once per invocation — there is
+no per-cue equivalent on ffmpeg-skill's side at all. Reconciling those two
+shapes losslessly is only possible when every cue that sets a given field
+agrees on its value (kajisho5/subtitle-skill#5):
+
+| `SubtitleStyle` field | caption.py flag | Conversion | Notes |
+|---|---|---|---|
+| `color` | `--color` | none (forwarded verbatim) | caption.py's own `color_hex()` normalizes `"#RRGGBB"`/`"RRGGBB"`/`"0xRRGGBB"` and fails cleanly (`INVALID_INPUT`) on anything else; `models.py` does not itself validate the string. |
+| `bold` | `--bold` | `True` → flag present; `False`/`None` → omitted | `--bold` is `action="store_true"` — there is no `--no-bold` to send for `False`, and omitting it already matches caption.py's own default. |
+| `size` | `--size` | `points = round(size / 100 × 288)` | `size` is documented as "0..100, percent" with no stated percent-of-what; caption.py's own `--size` help text says its unit is "ASS points relative to a 288p script height, scales automatically". Percent-of-that-same-288-line baseline is the one interpretation that lines up with a number caption.py's own author already chose — confirmed empirically, not just from the help text, by burning the same `--size` into two real videos of different heights and measuring the rendered glyph's pixel height in each: it scaled proportionally with the real video height. |
+| `align` | *(none)* | — | caption.py has no `--align` distinct from `--position`; `--position`'s vocabulary (see next row) is not a lossless target for pure left/center/right text justification — e.g. its `"center"` means the screen's dead center (ASS Alignment 5), not "bottom, center-justified" (Alignment 2, caption.py's own default), so mapping `align="center"` onto it would silently relocate the caption vertically too. **Left unmapped, not guessed at.** |
+| `position` / `line` | *(none)* | — | 0..100 percent, from-left/from-top coordinates. caption.py has no numeric/percent placement for an SRT burn at all — only 7 named anchors (`bottom`, `top`, `center`, `bottom-left`, `bottom-right`, `top-left`, `top-right`) plus one uniform `--margin`. There is no percent-to-bucket formula that doesn't throw away the caller's actual number. **Left unmapped, not guessed at.** |
+| `italic` | *(none)* | — | caption.py's plain-SRT `force_style` string never includes an `Italic=` key (only `Bold=` is exposed there). Smaller gap than it looks in practice: `generate_srt` already wraps a cue's text in `<i>...</i>` when `style.italic` is set, and libass honors that inline SRT tag on its own, independent of `force_style` — so per-cue italic already renders correctly, just not via anything `render` forwards as an argv flag. |
+
+Wired fields only take effect for `mode: "burn"` — caption.py's own docs
+say styling has no meaning for a soft-muxed subtitle stream, so
+`mode: "mux"` silently ignores none of it: **setting `color`/`bold`/`size`
+with `mode: "mux"` is rejected up front** (`UNSUPPORTED_FORMAT`, from the
+plain-SRT-generation step, same as `align`/`position`/`line` always are)
+rather than accepted and silently having no effect.
+
+Because `color`/`bold`/`size` can only be sent once per burn, `render`
+requires every cue that sets one of them to agree on the value: two cues
+with the same `style.color` render fine (one, correctly-shared, `--color`
+call); two cues with *different* `style.color` values raise
+`INVALID_INPUT` rather than silently keeping one cue's request and
+dropping the other's. `align`/`position`/`line` are rejected the same way
+`generate` already rejects them for a plain SRT file (`UNSUPPORTED_FORMAT`)
+— they have no burn-time representation either, so there is nothing
+render-specific to exempt them into.
+
 Failure responses follow ffmpeg-skill's own shape —
 `{"status": "failed", "error": {"kind": "input"|"ffmpeg"|"missing_tool", "message": "..."}}`
 — mapped to `INVALID_INPUT` / `TOOL_ERROR` / `DEPENDENCY_ERROR`
@@ -417,8 +466,8 @@ wanted, belongs to whoever is driving the render.
 
 | Result | Measurement |
 |---|---|
-| **111 / 111** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, and render delegation (burn and mux) |
-| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` / `_contract.py` (kajisho5/ffmpeg-skill, skill version 0.12.2) — not a hand-rolled stub — including a real burn-in and a real mux, each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux) |
+| **148 / 148** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, `SubtitleStyle` → caption.py wiring, and render delegation (burn and mux) |
+| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` / `_contract.py` (kajisho5/ffmpeg-skill, skill version 0.12.2) — not a hand-rolled stub — including a real burn-in and a real mux, each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux, `--color`/`--bold`/`--size` for styled burns) |
 | **vendor drift checked weekly** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main and diffs it against the vendored copy, separately from normal-PR CI |
 | **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
