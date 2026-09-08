@@ -63,12 +63,32 @@ way you wanted — that is a visual judgement outside this skill's scope.
   convention (see README §5).
 - `style` is an allowlisted, per-cue object (`align`, `position`,
   `line`, `size`, `bold`, `italic`, `color`) for `generate`'s SRT/WebVTT
-  output. It is **not** forwarded to ffmpeg-skill's `caption` tool during
-  `render` (ffmpeg-skill's caption styling is global-per-call, not
-  per-cue, so there is no lossless translation — see README §14). If you
-  need font/color/position control on a burned-in video, call
-  ffmpeg-skill's `caption` tool yourself with those flags instead of
-  going through subtitle-skill's `render`.
+  output. For `render`'s `mode: "burn"`, only `color`/`bold`/`size` are
+  additionally forwarded to ffmpeg-skill's `caption` tool, as its own
+  `--color`/`--bold`/`--size` flags — see "SubtitleStyle → caption.py"
+  below for the exact mapping (including `size`'s percent-to-points
+  conversion) and why `align`/`position`/`line`/`italic` have no
+  caption.py equivalent and are never forwarded. Because caption.py's
+  styling is one whole-burn setting, not per-cue, every cue that sets
+  `color`/`bold`/`size` must agree on the value — a document that
+  genuinely wants different values on different cues is rejected
+  (`INVALID_INPUT`) for `render`, not silently resolved by keeping one
+  cue's request and dropping the rest. `mode: "mux"` forwards none of
+  it — caption.py's own docs say styling has no effect there, so setting
+  `color`/`bold`/`size` with `mode: "mux"` is rejected up front
+  (`UNSUPPORTED_FORMAT`) rather than silently accepted and ignored. If
+  you need `align`/`position`/`line`/font/outline/animation control on a
+  burned-in video, call ffmpeg-skill's `caption` tool yourself with those
+  flags instead of going through subtitle-skill's `render`.
+
+### `SubtitleStyle` → caption.py (render, `mode: "burn"` only)
+
+| field | caption.py flag | conversion |
+|---|---|---|
+| `color` | `--color` | forwarded verbatim (caption.py validates the hex format itself) |
+| `bold` | `--bold` | `True` → flag present; `False`/`None` → omitted |
+| `size` (0..100 percent) | `--size` | `round(size / 100 × 288)` — caption.py's `--size` is in ASS points relative to its own 288-line nominal baseline |
+| `align` / `position` / `line` / `italic` | *(none)* | no clean caption.py equivalent — left unmapped, not guessed at; see README "SubtitleStyle → caption.py" for the full per-field reasoning |
 
 ## Fatal vs. warning: read `observation`, don't assume success means "clean"
 

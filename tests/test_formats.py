@@ -59,6 +59,45 @@ def test_srt_rejects_unsupported_style():
     assert exc.value.code == "UNSUPPORTED_FORMAT"
 
 
+# --- allow_style_fields: the render("burn")-only escape hatch (subtitle-skill#5) --
+# generate_srt's default (used by the `generate` operation, and any caller that
+# omits the keyword, as above) rejects color/size exactly like align/position/line.
+# operations._run_render is the only caller that ever passes a non-empty
+# allow_style_fields, and only for mode="burn" -- see formats.srt.generate_srt's
+# own docstring for why that specific exemption is honest rather than a shortcut.
+
+
+def test_srt_color_and_size_still_rejected_by_default():
+    doc = _doc([{"id": "c1", "start": 0, "end": 1, "text": "x", "style": {"color": "FF0000"}}])
+    with pytest.raises(SubtitleSkillError) as exc:
+        generate_srt(doc)
+    assert exc.value.code == "UNSUPPORTED_FORMAT"
+
+    doc2 = _doc([{"id": "c1", "start": 0, "end": 1, "text": "x", "style": {"size": 10}}])
+    with pytest.raises(SubtitleSkillError) as exc2:
+        generate_srt(doc2)
+    assert exc2.value.code == "UNSUPPORTED_FORMAT"
+
+
+def test_srt_color_and_size_accepted_when_explicitly_allowed():
+    doc = _doc(
+        [{"id": "c1", "start": 0, "end": 1, "text": "x", "style": {"color": "FF0000", "size": 10, "bold": True}}]
+    )
+    out = generate_srt(doc, allow_style_fields=frozenset({"color", "size"}))
+    assert "<b>x</b>" in out
+
+
+def test_srt_allow_style_fields_is_per_field_not_all_or_nothing():
+    """`allow_style_fields` exempts exactly the fields named -- allowing
+    "color" must not also silently exempt "position". (operations._run_render,
+    the only real caller, never passes "align"/"position"/"line" for exactly
+    this reason -- see the render-side tests in test_engine_render.py.)"""
+    doc = _doc([{"id": "c1", "start": 0, "end": 1, "text": "x", "style": {"position": 50}}])
+    with pytest.raises(SubtitleSkillError) as exc:
+        generate_srt(doc, allow_style_fields=frozenset({"color", "size"}))
+    assert exc.value.code == "UNSUPPORTED_FORMAT"
+
+
 def test_vtt_basic_header_and_timestamp():
     doc = _doc([{"id": "c1", "start": 0, "end": 1.234, "text": "hi"}])
     out = generate_vtt(doc)

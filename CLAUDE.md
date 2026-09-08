@@ -134,6 +134,55 @@ fixed 4-token argv:
   language-tag test deliberately uses `.mkv` output to isolate
   subtitle-skill's own forwarding logic from that muxer quirk.
 
+**`render` now forwards a subset of `SubtitleStyle` to caption.py**
+(subtitle-skill#5, this session). Previously `SKILL.md`/README documented
+a deliberate full opt-out ("style is not forwarded to ffmpeg-skill's
+caption tool during render... there is no lossless translation"). That
+was overly broad: `color`/`bold`/`size` genuinely DO have a real
+caption.py target (`--color`/`--bold`/`--size`); only `align`/`position`/
+`line`/`italic` don't. Verified against caption.py's real argparse
+definitions and force_style construction, not assumed:
+- `color` -> `--color` verbatim (caption.py's own `color_hex()` validates).
+- `bold` -> `--bold` when `True` (`action="store_true"`, no `--no-bold`).
+- `size` (0..100 percent) -> `--size <round(size/100*288)>`. caption.py's
+  own help text says `--size` is "ASS points relative to a 288p script
+  height, scales automatically" -- confirmed empirically this session by
+  burning the same `--size` into two real videos of different heights and
+  measuring the rendered glyph's pixel height in each (it scaled
+  proportionally with the real video height), not trusted from the help
+  text alone.
+- `align`/`position`/`line`/`italic` remain genuinely unmapped and
+  undocumented as forwarded: no `--align` flag exists at all;
+  `--position`'s 7 named anchors conflate horizontal justification with
+  vertical anchor (its `"center"` is screen-center, not
+  bottom-center-justified) so there is no lossless bucket for `align`, and
+  no numeric/percent placement exists at all for `position`/`line`;
+  `italic` has no force_style key in caption.py's plain-SRT path
+  (though it already renders correctly per-cue via the pre-existing
+  `<i>` SRT tag, unrelated to force_style).
+- The real complication: `formats.generate_srt` already rejected
+  `color`/`size` with `UNSUPPORTED_FORMAT` for *any* caller (it's meant
+  for a bare .srt file, which truly can't encode them) -- `render`'s own
+  SRT generation would have hit that same rejection before ever reaching
+  caption.py, making the new wiring dead code. Fixed by giving
+  `generate_srt` an internal `allow_style_fields` parameter that
+  `operations._run_render` sets to `{"color", "size"}` only for
+  `mode="burn"` (never for `generate`, never for `mode="mux"`, and never
+  including `align`/`position`/`line`).
+- caption.py's force_style is a single, whole-burn setting with no
+  per-cue equivalent, but `SubtitleStyle` is per-cue on this model.
+  `operations._run_render` reduces a document's cue styles to the one
+  `color`/`bold`/`size` triple actually forwarded, requiring every cue
+  that sets a given field to agree; a genuine conflict is `INVALID_INPUT`,
+  never resolved by silently picking one cue's value.
+- Covered by `tests/test_engine_style.py` (argv construction against a
+  fake caption.py, including the "unset style changes nothing" regression
+  guard), new cases in `tests/test_formats.py` (the `allow_style_fields`
+  escape hatch), and new cases in `tests/test_engine_render.py` against
+  the real vendored caption.py (reading the persisted sidecar's
+  `engine_response.commands` for the real, caption.py-reported
+  `force_style` string -- `execute()`'s own response never carries it).
+
 ## Capabilities (what this repo actually exposes)
 
 Two operations, both real and tested — see `contract --json` as the
@@ -174,9 +223,29 @@ Ordered by value, not urgency:
    `subtitle.burn`-vs-`subtitle.render` ownership question, not this);
    noted here as the next real capability gap once someone decides this
    skill's typed cue model should grow a `fps` concept.
+4. **`SubtitleStyle.align`/`.position`/`.line`/`.italic` still have no
+   `render`-burn representation** — not an oversight, a verified real gap
+   (see the subtitle-skill#5 entry below and README's "SubtitleStyle →
+   caption.py" table for the exact per-field reasoning): caption.py has no
+   `--align` flag and no numeric/percent placement at all, and its
+   plain-SRT force_style path never exposes an `Italic=` key. Closing this
+   would require either a caption.py feature that does not exist today, or
+   moving subtitle-skill's own render path onto `--ass` (a bigger, riskier
+   change than force_style flags, and this skill never sends `--ass`
+   today) — not something to do speculatively.
 
 ### Done since the gaps above were first written
 
+- **`render` forwards `SubtitleStyle.color`/`.bold`/`.size` to
+  caption.py's `--color`/`--bold`/`--size`, for `mode="burn"`**
+  (subtitle-skill#5, this session) — see the dedicated entry above (right
+  after the ffmpeg-skill dependency section) for the exact mapping, the
+  `size` percent-to-288-points conversion and its empirical verification,
+  the `formats.generate_srt` `allow_style_fields` fix that made forwarding
+  `color`/`size` actually reachable, and the per-cue-vs-whole-burn
+  reduction `operations._run_render` performs. `align`/`position`/`line`/
+  `italic` remain a documented, verified gap (see above), not silently
+  dropped or guessed at.
 - **`render` exposes ffmpeg-skill/caption's mux mode, audio-track
   selection, and language tagging** (subtitle-skill#3 fix B) — `mode:
   "mux"` (soft/toggleable subtitle track, vs. the default `"burn"`),
@@ -238,7 +307,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 111 tests, `pytest -q`, all passing; CI green on
+At last update: 148 tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.
