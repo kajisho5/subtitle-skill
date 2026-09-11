@@ -1,0 +1,179 @@
+name: Release
+
+# Single job, triggered only by a push to main. Deliberately NOT split into a
+# separate tag-triggered workflow: a tag/commit pushed here with the default
+# GITHUB_TOKEN does not trigger other `push` (or `push: tags`) workflow runs
+# (GitHub's anti-recursion rule for GITHUB_TOKEN-authored pushes), so a
+# tag-triggered second workflow would simply never fire. Everything --
+# version resolution, bump, changelog, tag, release, publish -- happens in
+# this one job instead.
+on:
+  push:
+    branches: ["main"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    # This job's own version-bump commit (pushed below) would otherwise
+    # re-trigger this same workflow on the next push event; skip that run
+    # rather than looping.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve current version and latest release
+        id: current
+        run: |
+          set -euo pipefail
+          CURRENT_VERSION=$(grep -m1 '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')
+          if ! [[ "$CURRENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::pyproject.toml version '$CURRENT_VERSION' is not a plain X.Y.Z semver" >&2
+            exit 1
+          fi
+          LATEST_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          LATEST_VERSION="${LATEST_TAG#v}"
+
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+          # Auto-bump only when the checked-in version still matches the
+          # latest release tag -- i.e. nobody has manually bumped it since.
+          # A manual bump (current_version != latest_version) is respected
+          # as-is: we skip drafting/bumping and just tag+release what's
+          # already checked in.
+          if [ -z "$LATEST_TAG" ] || [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+            echo "auto_bump=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "auto_bump=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Draft next version from merged PR labels (no publish, no write)
+        id: drafter
+        if: steps.current.outputs.auto_bump == 'true' && steps.current.outputs.latest_tag != ''
+        uses: release-drafter/release-drafter@v7
+        with:
+          config-name: release-drafter.yml
+          dry-run: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide target version
+        id: target
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.current.outputs.auto_bump }}" = "true" ] && [ -n "${{ steps.current.outputs.latest_tag }}" ]; then
+            TARGET_VERSION="${{ steps.drafter.outputs.resolved_version }}"
+          else
+            TARGET_VERSION="${{ steps.current.outputs.current_version }}"
+          fi
+          if ! [[ "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::resolved target version '$TARGET_VERSION' is not a plain X.Y.Z semver" >&2
+            exit 1
+          fi
+          echo "target_version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this version is already released
+        id: guard
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/v${{ steps.target.outputs.target_version }}" >/dev/null 2>&1; then
+            echo "already_tagged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_tagged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump pyproject.toml version
+        if: steps.current.outputs.auto_bump == 'true' && steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"${{ steps.target.outputs.target_version }}\"/" pyproject.toml
+          grep -m1 '^version = ' pyproject.toml
+
+      - name: Generate changelog entry
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          # git log's own formatting writes commit subjects straight to a
+          # file -- never interpolated through a GitHub Actions ${{ }}
+          # expression -- so an untrusted PR title containing shell/YAML
+          # metacharacters can't reach the workflow's own expression parser.
+          {
+            echo "## v${{ steps.target.outputs.target_version }} - $(date -u +%Y-%m-%d)"
+            echo
+            if [ -n "${{ steps.current.outputs.latest_tag }}" ]; then
+              git log "${{ steps.current.outputs.latest_tag }}..HEAD" --no-merges --pretty=format:'- %s (%h)'
+            else
+              git log --no-merges --pretty=format:'- %s (%h)'
+            fi
+            echo
+            echo
+          } > /tmp/changelog-entry.md
+          if [ -f CHANGELOG.md ]; then
+            cat /tmp/changelog-entry.md CHANGELOG.md > /tmp/changelog-full.md
+          else
+            { echo "# Changelog"; echo; cat /tmp/changelog-entry.md; } > /tmp/changelog-full.md
+          fi
+          mv /tmp/changelog-full.md CHANGELOG.md
+
+      - name: Commit version bump and changelog
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          git add pyproject.toml CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): v${{ steps.target.outputs.target_version }}"
+            git push origin HEAD:main
+          fi
+
+      - name: Tag release
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          git tag "v${{ steps.target.outputs.target_version }}"
+          git push origin "v${{ steps.target.outputs.target_version }}"
+
+      - name: Create GitHub Release
+        if: steps.guard.outputs.already_tagged == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "v${{ steps.target.outputs.target_version }}" \
+            --repo "${{ github.repository }}" \
+            --title "v${{ steps.target.outputs.target_version }}" \
+            --notes-file /tmp/changelog-entry.md
+
+      - name: Build package
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip build
+          python3 -m build
+
+      - name: Publish to PyPI
+        if: steps.guard.outputs.already_tagged == 'false'
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PYPI_API_TOKEN:-}" ]; then
+            echo "No PYPI_API_TOKEN secret configured -- skipping publish (tag and GitHub Release still went out)."
+            exit 0
+          fi
+          python3 -m pip install --upgrade twine
+          python3 -m twine upload --non-interactive -u __token__ -p "$PYPI_API_TOKEN" dist/*

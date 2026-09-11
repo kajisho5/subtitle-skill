@@ -1,0 +1,38 @@
+name: PR Labeler
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  autolabel:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      # release-drafter's autolabeler adds labels via the GitHub API, which
+      # 404s on a label that doesn't exist yet -- ensure the ones our
+      # release-drafter.yml categorizes/version-resolves on are present.
+      - name: Ensure release-drafter labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for label in \
+            "major:B60205:Breaking change" \
+            "feature:0E8A16:New feature" \
+            "minor:0E8A16:Minor, non-breaking change" \
+            "fix:D93F0B:Bug fix" \
+            "bug:D93F0B:Something isn't working" \
+            "chore:BFD4F2:Maintenance, docs, tests, CI"; do
+            IFS=":" read -r name color description <<< "$label"
+            gh label create "$name" --color "$color" --description "$description" --force \
+              --repo "${{ github.repository }}"
+          done
+
+      - uses: release-drafter/release-drafter/autolabeler@v7
+        with:
+          config-name: release-drafter.yml
