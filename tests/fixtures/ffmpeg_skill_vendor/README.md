@@ -11,11 +11,12 @@ ffmpeg-skill's actual `caption`/`probe`/`_contract` CLI contract, without
 this repository depending on a live checkout of ffmpeg-skill or network
 access during CI.
 
-`scripts/check_vendor_drift.py` (repo root) checks these four files
-against ffmpeg-skill's current main on a schedule (see
-`.github/workflows/vendor-drift.yml`) so a real upstream change becomes
-visible instead of silently making these tests exercise a contract
-ffmpeg-skill no longer has. Pin history: `2abd89c` (v0.9.1) →
+`scripts/check_vendor_drift.py` (repo root) runs the same tests against
+ffmpeg-skill's current main every day (see
+`.github/workflows/vendor-drift.yml`), so a real upstream break becomes
+visible while an ordinary new release does not fail anything. This copy no
+longer has to match main byte for byte; re-vendor it only when a test needs
+behaviour this pin does not have. Pin history: `2abd89c` (v0.9.1) →
 `b51dc5e` (v0.9.2, `_contract.py`-only drift, a `color.py --correct`
 capability entry) → `336e0c4d` (v0.12.2, re-vendored here to close
 [subtitle-skill#3](https://github.com/kajisho5/subtitle-skill/issues/3)).
