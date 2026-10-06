@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
-"""Detect drift between the vendored ffmpeg-skill test fixture
-(tests/fixtures/ffmpeg_skill_vendor/scripts/) and the real, current
-ffmpeg-skill main.
+"""Check that subtitle-skill still works with ffmpeg-skill's current main.
+
+Clones ffmpeg-skill main and runs this repository's whole test suite with
+SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC pointed at it, so the render and
+doctor tests drive the real, current caption.py / probe.py instead of the
+pinned copy in tests/fixtures/ffmpeg_skill_vendor/.
+
+A new ffmpeg-skill release is not drift by itself: ffmpeg-skill ships
+several releases a week, and a byte comparison against the pinned copy
+failed on every one of them. This fails only when subtitle-skill stops
+working against the current release.
 
 This is NOT part of the main test suite / CI job (see CLAUDE.md
 "Things intentionally NOT done, and why"): the main suite deliberately
-does not depend on network access to another repository. This script is
-run manually, or by the separate, non-blocking
-`.github/workflows/vendor-drift.yml` schedule, precisely so a real
-upstream change to the files subtitle_skill.engine actually invokes
-(caption.py, probe.py, _common.py) or to the contract generator
-(_contract.py) becomes visible instead of silently making the vendored
-render tests test something ffmpeg-skill no longer does.
+does not depend on network access to another repository. It runs on the
+`.github/workflows/vendor-drift.yml` schedule, or by hand:
 
     python3 scripts/check_vendor_drift.py
 """
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 REPO_URL = "https://github.com/kajisho5/ffmpeg-skill"
-WATCHED_FILES = ["scripts/_common.py", "scripts/caption.py", "scripts/probe.py", "scripts/_contract.py"]
-VENDOR_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "ffmpeg_skill_vendor" / "scripts"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
+        tmp = Path(tmp_str) / "ffmpeg-skill"
         try:
             subprocess.run(
                 ["git", "clone", "--depth", "1", REPO_URL, str(tmp)],
@@ -44,36 +48,23 @@ def main() -> int:
         head = subprocess.run(
             ["git", "-C", str(tmp), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
         ).stdout.strip()
+        try:
+            version = json.loads((tmp / "package.json").read_text(encoding="utf-8")).get("version", "?")
+        except (OSError, ValueError):
+            version = "?"
+        print(f"ffmpeg-skill main is at {head} (version {version})")
 
-        drifted = []
-        for rel in WATCHED_FILES:
-            name = Path(rel).name
-            current = tmp / rel
-            vendored = VENDOR_DIR / name
-            if not current.exists():
-                drifted.append((name, "removed upstream"))
-                continue
-            if not vendored.exists():
-                drifted.append((name, "not vendored locally (new file to add)"))
-                continue
-            if current.read_bytes() != vendored.read_bytes():
-                drifted.append((name, "content differs"))
-
-        print(f"ffmpeg-skill main is at {head}")
-        if drifted:
-            print("DRIFT DETECTED:")
-            for name, reason in drifted:
-                print(f"  {name}: {reason}")
+        env = dict(os.environ, SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC=str(tmp))
+        result = subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=ROOT, env=env)
+        if result.returncode != 0:
             print(
-                "\nRe-vendor: copy the changed file(s) from ffmpeg-skill main into "
-                "tests/fixtures/ffmpeg_skill_vendor/scripts/, update the pinned commit "
-                "hash in tests/fixtures/ffmpeg_skill_vendor/README.md, run the test "
-                "suite, and re-verify subtitle_skill.engine's caption.py/probe.py "
-                "invocation still matches the new contract before merging."
+                f"\nINCOMPATIBLE: the test suite fails against ffmpeg-skill {version} ({head}). "
+                "Fix subtitle_skill.engine for the new caption/probe behaviour; re-vendoring "
+                "tests/fixtures/ffmpeg_skill_vendor/ is optional."
             )
             return 1
 
-        print("No drift: caption.py / probe.py / _common.py / _contract.py match ffmpeg-skill main.")
+        print(f"\nCompatible: the test suite passes against ffmpeg-skill {version}.")
         return 0
 
 
