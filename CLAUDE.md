@@ -99,7 +99,7 @@ by itself yet", still true, see Known gaps below). Pin history:
 `2abd89c` (v0.9.1) → `b51dc5e` (v0.9.2, `_contract.py`-only drift) →
 `336e0c4d` (v0.12.2, `caption.py`+`_common.py` drift, this session). Do
 not assume it is still byte-identical by the time you read this either
-— run `python3 scripts/check_vendor_drift.py` (or check the weekly
+— run `python3 scripts/check_vendor_drift.py` (or check the daily
 `vendor-drift.yml` workflow run) before trusting it blindly.
 
 **`render` now exposes `caption.py`'s mux/audio-track capabilities
@@ -205,13 +205,12 @@ Ordered by value, not urgency:
 1. **PyPI publication itself** — metadata is ready (see below); nothing
    has actually been uploaded. Requires a human decision (account,
    namespace, when) — not something to do unilaterally.
-2. **`vendor-drift.yml` is weekly, not on every ffmpeg-skill release** —
-   a same-day re-vendor after a real ffmpeg-skill change to
-   `caption.py`/`probe.py` still needs someone (or a session) to notice
-   and act on the workflow's result; it does not open an issue or PR by
-   itself yet. **This is not hypothetical** — three ffmpeg-skill feature
-   releases (0.10.0-0.12.1) passed unnoticed before this session's
-   re-vendor (subtitle-skill#3) caught it.
+2. **Compatibility with new ffmpeg-skill releases is checked daily, not
+   fixed automatically** — `vendor-drift.yml` now runs the whole test suite
+   against ffmpeg-skill main every day and fails only when subtitle-skill
+   actually breaks (a plain new release passes). A real break still needs
+   someone to fix `subtitle_skill.engine`; the workflow does not open an
+   issue or PR by itself.
 3. **No SMPTE timecode cue support in `render`** — ffmpeg-skill 0.12.x's
    `caption.py --text` accepts `hh:mm:ss:ff` SMPTE non-drop-frame
    timecode cues (`parse_time(fps=...)`/`fmt_smpte_time()`, closing
@@ -275,19 +274,19 @@ Ordered by value, not urgency:
   that `install`/`install --all`/`install --uninstall` all work.
   `tests/test_installer.py` also guards the packaged copy against
   drifting from the repo-root `SKILL.md`.
-- **Vendored ffmpeg-skill drift detection**
+- **ffmpeg-skill compatibility check**
   (`scripts/check_vendor_drift.py`, `.github/workflows/vendor-drift.yml`,
-  weekly + manual `workflow_dispatch`) — clones current ffmpeg-skill main
-  and diffs `caption.py`/`probe.py`/`_common.py`/`_contract.py` against
-  the vendored copy; separate from the main `ci.yml` so normal PRs never
-  depend on that network fetch. Caught two real drifts so far: first
-  `_contract.py` only (unrelated `color.py --correct` addition, re-vendored
-  same session), then a much larger one (`caption.py`+`_common.py`,
-  0.9.2 → 0.12.2, three releases stale, subtitle-skill#3) re-vendored
-  this session alongside the `mode`/`audio_stream`/`language` fix above
-  (see `tests/fixtures/ffmpeg_skill_vendor/README.md` for the full commit
-  history). The detector itself is doing its job — it is the "notice and
-  act on it" half (gap #2 above) that keeps lagging.
+  daily + manual `workflow_dispatch`) — clones current ffmpeg-skill main
+  and runs the full test suite with `SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC`
+  pointed at it, so the render/doctor tests drive the real current
+  `caption.py`/`probe.py`. It replaced a byte comparison against the
+  vendored copy, which failed on every ffmpeg-skill release (several a
+  week) whether or not anything broke. Its first run against 2.5.1 found
+  two real breaks, both fixed in `engine.py`: ffmpeg-skill 2.0 moved
+  `_common.py` into a `_common/` package (subtitle-skill no longer found
+  the install at all), and 1.10 refuses to replace an existing output
+  without `--overwrite` (a re-render failed). The vendored copy (0.12.2)
+  stays as the offline fixture for `ci.yml`; re-vendoring it is optional.
 
 ## Things intentionally NOT done, and why
 

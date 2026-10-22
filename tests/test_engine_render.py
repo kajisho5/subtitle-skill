@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-VENDOR_ROOT = Path(__file__).parent / "fixtures" / "ffmpeg_skill_vendor"
+# SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC points these tests at a real ffmpeg-skill
+# checkout instead of the pinned copy (.github/workflows/vendor-drift.yml does
+# this against ffmpeg-skill's current main).
+VENDOR_ROOT = Path(
+    os.environ.get("SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC")
+    or Path(__file__).parent / "fixtures" / "ffmpeg_skill_vendor"
+)
 
 
 @pytest.fixture()
@@ -26,7 +32,7 @@ def ffmpeg_skill_install(tmp_path, monkeypatch):
     ffmpeg-skill install looks to subtitle-skill.
     """
     install_dir = tmp_path / "ffmpeg-skill-install"
-    shutil.copytree(VENDOR_ROOT / "scripts", install_dir / "scripts")
+    shutil.copytree(VENDOR_ROOT / "scripts", install_dir / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
     monkeypatch.setenv("SUBTITLE_SKILL_FFMPEG_SKILL_DIR", str(install_dir))
     return install_dir
 
@@ -262,6 +268,8 @@ def test_render_identity_changes_when_script_content_changes(tmp_path, ffmpeg_sk
     # patch _common.py's behavior without touching package.json (there is
     # none in this fixture) or caption.py itself
     common_path = ffmpeg_skill_install / "scripts" / "_common.py"
+    if not common_path.exists():  # ffmpeg-skill 2.x: a _common/ package
+        common_path = ffmpeg_skill_install / "scripts" / "_common" / "__init__.py"
     common_path.write_text(common_path.read_text(encoding="utf-8") + "\n# patched\n", encoding="utf-8")
 
     third = execute(_base_request(tmp_path))

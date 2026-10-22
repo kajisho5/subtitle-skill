@@ -138,8 +138,34 @@ def _candidate_install_roots() -> list[Path]:
     ]
 
 
+def _common_sources(root: Path) -> list[Path]:
+    """The `_common` code `caption.py` imports: a single `_common.py` in
+    ffmpeg-skill releases before 2.0, a `_common/` package from 2.0 on.
+    Empty when neither is present."""
+    module = root / "scripts" / "_common.py"
+    if module.is_file():
+        return [module]
+    package = root / "scripts" / "_common"
+    if (package / "__init__.py").is_file():
+        return sorted(package.rglob("*.py"))
+    return []
+
+
+def _caption_takes_overwrite(root: Path) -> bool:
+    """ffmpeg-skill 1.10+ refuses to replace an existing output unless
+    `--overwrite` is passed; earlier releases always replaced it and reject
+    the unknown flag. The flag is defined in the shared argument helpers."""
+    for path in [root / "scripts" / "caption.py", *_common_sources(root)]:
+        try:
+            if '"--overwrite"' in path.read_text(encoding="utf-8"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _looks_like_ffmpeg_skill(root: Path) -> bool:
-    return (root / "scripts" / "caption.py").is_file() and (root / "scripts" / "_common.py").is_file()
+    return (root / "scripts" / "caption.py").is_file() and bool(_common_sources(root))
 
 
 def resolve_ffmpeg_skill_root() -> Optional[Path]:
@@ -207,10 +233,14 @@ def ffmpeg_skill_script_hash(root: Path) -> str:
     regardless of whether whoever changed it also remembered to bump
     package.json.
     """
-    parts = [
-        sha256_file(root / "scripts" / "caption.py"),
-        sha256_file(root / "scripts" / "_common.py"),
-    ]
+    parts = [sha256_file(root / "scripts" / "caption.py")]
+    common = _common_sources(root)
+    if len(common) == 1 and common[0].name == "_common.py":
+        parts.append(sha256_file(common[0]))
+    else:
+        # a package: name each file too, so a moved helper changes the hash
+        for path in common:
+            parts.append(path.relative_to(root).as_posix() + ":" + sha256_file(path))
     return hashlib.sha256("".join(parts).encode("ascii")).hexdigest()
 
 
@@ -496,6 +526,9 @@ def burn_in(
     input_duration = input_probe.get("duration")
 
     argv = [str(video_path), "--srt", str(subtitle_path), "-o", str(output_path)]
+    # a re-render replaces subtitle-skill's own earlier output at the same path
+    if _caption_takes_overwrite(root):
+        argv.append("--overwrite")
     if mode != "burn":
         argv += ["--mode", mode]
     if audio_stream is not None:

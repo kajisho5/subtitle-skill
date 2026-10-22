@@ -2,18 +2,25 @@
 detected capabilities (per its own `caption` tool requirements), not just whether
 some ffmpeg-skill install directory happens to exist.
 """
+import os
 import shutil
 from pathlib import Path
 
 import pytest
 
-VENDOR_ROOT = Path(__file__).parent / "fixtures" / "ffmpeg_skill_vendor"
+# SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC points these tests at a real ffmpeg-skill
+# checkout instead of the pinned copy (.github/workflows/vendor-drift.yml does
+# this against ffmpeg-skill's current main).
+VENDOR_ROOT = Path(
+    os.environ.get("SUBTITLE_SKILL_TEST_FFMPEG_SKILL_SRC")
+    or Path(__file__).parent / "fixtures" / "ffmpeg_skill_vendor"
+)
 
 
 @pytest.fixture()
 def ffmpeg_skill_install(tmp_path, monkeypatch):
     install_dir = tmp_path / "ffmpeg-skill-install"
-    shutil.copytree(VENDOR_ROOT / "scripts", install_dir / "scripts")
+    shutil.copytree(VENDOR_ROOT / "scripts", install_dir / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
     monkeypatch.setenv("SUBTITLE_SKILL_FFMPEG_SKILL_DIR", str(install_dir))
     return install_dir
 
