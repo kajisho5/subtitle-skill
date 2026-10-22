@@ -1,0 +1,58 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+categories:
+  - title: "Breaking changes"
+    labels:
+      - "major"
+  - title: "Features"
+    labels:
+      - "feature"
+      - "minor"
+  - title: "Fixes"
+    labels:
+      - "fix"
+      - "bug"
+  - title: "Chores"
+    labels:
+      - "chore"
+
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&'
+
+version-resolver:
+  major:
+    labels:
+      - "major"
+  minor:
+    labels:
+      - "feature"
+      - "minor"
+  patch:
+    labels:
+      - "fix"
+      - "bug"
+      - "chore"
+  default: patch
+
+autolabeler:
+  - label: "major"
+    title:
+      - '/^(breaking|major)(\(.+\))?!?:/i'
+  - label: "feature"
+    title:
+      - '/^feat(ure)?(\(.+\))?:/i'
+  - label: "fix"
+    title:
+      - '/^fix(\(.+\))?:/i'
+  - label: "chore"
+    title:
+      - '/^(chore|docs|test|ci|refactor|style)(\(.+\))?:/i'
+    files:
+      - "**/*.md"
+      - ".github/**"
+
+template: |
+  ## What's changed
+
+  $CHANGES
