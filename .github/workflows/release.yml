@@ -109,8 +109,8 @@ jobs:
         run: |
           set -euo pipefail
           # git log's own formatting writes commit subjects straight to a
-          # file -- never interpolated through a GitHub Actions ${{ }}
-          # expression -- so an untrusted PR title containing shell/YAML
+          # file -- never interpolated through a GitHub Actions expression
+          # (dollar-brace-brace) -- so an untrusted PR title containing shell/YAML
           # metacharacters can't reach the workflow's own expression parser.
           {
             echo "## v${{ steps.target.outputs.target_version }} - $(date -u +%Y-%m-%d)"
