@@ -1,3 +1,7 @@
+## v0.1.1 - 2026-10-23
+
+- ci: bump GitHub Actions (checkout v7, setup-python v7, codeql-action v4, github-script v9) (#14) (ebf9271)
+
 # Changelog
 
 ## v0.1.0 - 2026-10-23
