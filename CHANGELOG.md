@@ -1,3 +1,7 @@
+## v0.1.2 - 2026-10-25
+
+- Add .github/FUNDING.yml (#15) (b8f3893)
+
 ## v0.1.1 - 2026-10-23
 
 - ci: bump GitHub Actions (checkout v7, setup-python v7, codeql-action v4, github-script v9) (#14) (ebf9271)
