@@ -1,3 +1,7 @@
+## v0.1.3 - 2026-10-30
+
+- Add ECOSYSTEM_ROADMAP.md: gaps, wiring and PR-sized steps from the 2026-10-30 ecosystem audit (#16) (ace672c)
+
 ## v0.1.2 - 2026-10-25
 
 - Add .github/FUNDING.yml (#15) (b8f3893)
