@@ -211,8 +211,11 @@ each does and `subtitle.language`'s forwarding as the mux language tag.
 `contract --json` also publishes `provides`: `generate` as Capability id
 `subtitle.generate`, `render` as `subtitle.render` — the cross-repository
 identifiers a registry (see `kajisho5/AI-video-production-OS`) can resolve
-to this Skill without hardcoding it. Additive; not a behavior change to
-either operation.
+to this Skill without hardcoding it. Each entry's `tool_id` is
+`subtitle/generate` / `subtitle/render`: the short `subtitle/` prefix that
+video-production-agent registers this Skill under, while `skill_id` stays
+`subtitle-skill` ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md)).
+Additive; not a behavior change to either operation.
 
 ```json
 {
