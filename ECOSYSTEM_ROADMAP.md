@@ -26,7 +26,7 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
 
 - [ ] **1. Single-source the version + dependencies**
   - Done when: contract version == pyproject
-- [x] **2. Align provides tool_id prefix** — `subtitle-skill/...` vs the agent's `subtitle/...`; fix or ADR ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md), PR_LINK)
+- [x] **2. Align provides tool_id prefix** — `subtitle-skill/...` vs the agent's `subtitle/...`; fix or ADR ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md), [#20](https://github.com/kajisho5/subtitle-skill/pull/20))
   - Done when: OS registry resolves without a mapping
 - [x] **3. Locale profiles** — ja/zh/ko full-width counting, kinsoku line breaking, per-locale cps defaults ([#19](https://github.com/kajisho5/subtitle-skill/pull/19))
   - Done when: Japanese fixtures
