@@ -1,3 +1,7 @@
+## v0.2.2 - 2026-10-30
+
+- ci: stop inferring major from PR titles; pin third-party actions by SHA (#21) (1606655)
+
 ## v0.2.1 - 2026-10-30
 
 - fix: publish provides tool ids as subtitle/... (ADR-002) (#20) (047d570)
