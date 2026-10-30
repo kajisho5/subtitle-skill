@@ -21,6 +21,13 @@ PROVIDES = {
     "render": "subtitle.render",
 }
 
+# Prefix of every `provides[].tool_id` (docs/adr/ADR-002-provides-tool-id-prefix.md). It is
+# the short domain name, not SKILL_ID: thumbnail-skill (`thumbnail/...`) and
+# transcription-skill (`transcription/...`) publish the same way, and it is the package id
+# video-production-agent registers this Skill under (`subtitle/generate`, `subtitle/render`).
+# SKILL_ID stays "subtitle-skill"; only the tool ids use this prefix.
+TOOL_ID_PREFIX = "subtitle"
+
 
 def build_contract() -> dict:
     return {
@@ -65,7 +72,7 @@ def build_contract() -> dict:
             },
         },
         "provides": [
-            {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{SKILL_ID}/{op}"}
+            {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{TOOL_ID_PREFIX}/{op}"}
             for op in OPERATIONS
         ],
         "capabilities": {

@@ -252,6 +252,16 @@ Ordered by value, not urgency:
   with its pinned `contract_0.1.0.json` first. Acceptance fixtures:
   `tests/fixtures/locale/ja_*.json`.
 
+- **`provides[].tool_id` is `subtitle/generate` / `subtitle/render`**
+  (ECOSYSTEM_ROADMAP step 2, `docs/adr/ADR-002-provides-tool-id-prefix.md`),
+  no longer `subtitle-skill/...`. It matches video-production-agent's own
+  tool ids and the thumbnail-skill / transcription-skill convention
+  (short prefix in tool ids, `-skill` in `skill_id`). `skill_id` stays
+  `subtitle-skill` and `contract_version` stays `1.0.0`. `provides` is not
+  in the agent's `DRIFT_KEYS`/`FATAL_DRIFT_KEYS`, so this is not drift for
+  its pinned contract (now `contract_0.2.0.json`). Do not change
+  `skill_id` to match: the agent compares it exactly.
+
 - **`render` forwards `SubtitleStyle.color`/`.bold`/`.size` to
   caption.py's `--color`/`--bold`/`--size`, for `mode="burn"`**
   (subtitle-skill#5, this session) — see the dedicated entry above (right
