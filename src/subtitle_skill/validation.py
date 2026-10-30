@@ -13,10 +13,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from .errors import SubtitleSkillError
+from .locales import LocaleProfile, break_lines, kinsoku_violations, profile_for
 from .models import SubtitleDocument, SubtitleCue
 
 #: Fields a caller may set. Nothing here is a "domain truth" -- these are
 #: just defaults used when the caller supplies no constraints at all.
+#: A document whose language has a locale profile (`locales.PROFILES`: ja,
+#: zh, ko) uses that profile's line-length and reading-speed defaults and its
+#: width-weighted character count instead; every other language uses these.
 DEFAULT_MAX_CHARS_PER_LINE = 42
 DEFAULT_MAX_LINES = 2
 DEFAULT_MIN_DURATION = 0.5
@@ -64,15 +68,22 @@ class ValidationIssue:
     code: str
     cue_id: Optional[str]
     message: str
+    #: a kinsoku-compliant re-break of the cue's text that fits the line
+    #: limits (locale profiles only). Reported, never applied.
+    suggested_text: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {"severity": self.severity, "code": self.code, "message": self.message}
         if self.cue_id is not None:
             d["cue_id"] = self.cue_id
+        if self.suggested_text is not None:
+            d["suggested_text"] = self.suggested_text
         return d
 
 
-def _validate_text(cue: SubtitleCue, constraints: SubtitleConstraints) -> list[ValidationIssue]:
+def _validate_text(
+    cue: SubtitleCue, constraints: SubtitleConstraints, profile: Optional[LocaleProfile] = None
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     text = cue.text
 
@@ -103,22 +114,79 @@ def _validate_text(cue: SubtitleCue, constraints: SubtitleConstraints) -> list[V
             )
         )
 
-    max_chars = constraints.max_chars_per_line or DEFAULT_MAX_CHARS_PER_LINE
-    for i, line in enumerate(lines):
-        if len(line) > max_chars:
-            issues.append(
-                ValidationIssue(
-                    "warning",
-                    "LINE_TOO_LONG",
-                    cue.id,
-                    f"line {i} has {len(line)} chars, exceeds max_chars_per_line={max_chars}",
+    if profile is None:
+        max_chars = constraints.max_chars_per_line or DEFAULT_MAX_CHARS_PER_LINE
+        for i, line in enumerate(lines):
+            if len(line) > max_chars:
+                issues.append(
+                    ValidationIssue(
+                        "warning",
+                        "LINE_TOO_LONG",
+                        cue.id,
+                        f"line {i} has {len(line)} chars, exceeds max_chars_per_line={max_chars}",
+                    )
                 )
-            )
+        return issues
 
+    issues.extend(_validate_locale_lines(cue, lines, max_lines, constraints, profile))
     return issues
 
 
-def _validate_duration(cue: SubtitleCue, constraints: SubtitleConstraints) -> list[ValidationIssue]:
+def _validate_locale_lines(
+    cue: SubtitleCue,
+    lines: list,
+    max_lines: int,
+    constraints: SubtitleConstraints,
+    profile: LocaleProfile,
+) -> list[ValidationIssue]:
+    """Line length in the profile's full-width units, plus kinsoku at every
+    existing line break. When anything is off, a kinsoku-compliant re-break
+    that fits both limits is attached as `suggested_text` -- if one exists."""
+    found: list = []  # (code, message)
+    max_chars = constraints.max_chars_per_line or profile.max_chars_per_line
+    for i, line in enumerate(lines):
+        width = profile.text_width(line)
+        if width > max_chars:
+            found.append(
+                (
+                    "LINE_TOO_LONG",
+                    f"line {i} has {width:g} chars (full-width units, locale profile '{profile.language}'), "
+                    f"exceeds max_chars_per_line={max_chars}",
+                )
+            )
+    for i, where, ch in kinsoku_violations(lines, profile):
+        if where == "start":
+            found.append(
+                (
+                    "KINSOKU_LINE_START",
+                    f"line {i} starts with {ch!r} (U+{ord(ch):04X}), which may not begin a line "
+                    f"(locale profile '{profile.language}')",
+                )
+            )
+        else:
+            found.append(
+                (
+                    "KINSOKU_LINE_END",
+                    f"line {i} ends with {ch!r} (U+{ord(ch):04X}), which may not end a line "
+                    f"(locale profile '{profile.language}')",
+                )
+            )
+    if not found:
+        return []
+
+    suggested = break_lines(cue.text, profile, max_chars)
+    fits = (
+        len(suggested) <= max_lines
+        and all(profile.text_width(line) <= max_chars for line in suggested)
+        and not kinsoku_violations(suggested, profile)
+    )
+    suggested_text = "\n".join(suggested) if fits and "\n".join(suggested) != cue.text else None
+    return [ValidationIssue("warning", code, cue.id, message, suggested_text) for code, message in found]
+
+
+def _validate_duration(
+    cue: SubtitleCue, constraints: SubtitleConstraints, profile: Optional[LocaleProfile] = None
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     min_d = constraints.min_duration or DEFAULT_MIN_DURATION
     max_d = constraints.max_duration or DEFAULT_MAX_DURATION
@@ -131,15 +199,21 @@ def _validate_duration(cue: SubtitleCue, constraints: SubtitleConstraints) -> li
             ValidationIssue("warning", "CUE_TOO_LONG", cue.id, f"duration {cue.duration:.3f}s > max_duration={max_d}")
         )
 
-    cps = constraints.reading_speed_cps or DEFAULT_READING_SPEED_CPS
-    text_len = len(cue.text.replace("\n", ""))
+    if profile is None:
+        cps = constraints.reading_speed_cps or DEFAULT_READING_SPEED_CPS
+        text_len = len(cue.text.replace("\n", ""))
+        unit = "chars"
+    else:
+        cps = constraints.reading_speed_cps or profile.reading_speed_cps
+        text_len = profile.text_width(cue.text)
+        unit = f"chars (full-width units, locale profile '{profile.language}')"
     if cue.duration > 0 and text_len / cue.duration > cps:
         issues.append(
             ValidationIssue(
                 "warning",
                 "READING_SPEED_TOO_HIGH",
                 cue.id,
-                f"{text_len} chars in {cue.duration:.3f}s exceeds reading_speed_cps={cps}",
+                f"{text_len:g} {unit} in {cue.duration:.3f}s exceeds reading_speed_cps={cps}",
             )
         )
     return issues
@@ -182,9 +256,10 @@ def validate_document(
                     )
                 )
 
+    profile = profile_for(document.language)
     for cue in document.cues:
-        issues.extend(_validate_text(cue, constraints))
-        issues.extend(_validate_duration(cue, constraints))
+        issues.extend(_validate_text(cue, constraints, profile))
+        issues.extend(_validate_duration(cue, constraints, profile))
 
     errors = [i for i in issues if i.severity == "error"]
     if errors:

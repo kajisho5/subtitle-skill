@@ -1,0 +1,81 @@
+{
+  "description": "Japanese documents through validate_document with no caller constraints: the ja profile's defaults (13 full-width characters per line, 4 characters per second; Netflix Japanese Timed Text Style Guide), width-weighted counting (half-width = 0.5), and kinsoku at existing line breaks. `expected` lists (code, cue_id) of every observation; `suggested_text` is checked where given.",
+  "cases": [
+    {
+      "name": "13 full-width characters fit; 14 do not (the generic 42-character default would accept both)",
+      "language": "ja",
+      "cues": [
+        {"id": "fits", "start": 0, "end": 4, "text": "今日はとても良い天気ですね"},
+        {"id": "long", "start": 4, "end": 8, "text": "今日はとても良い天気ですね。"}
+      ],
+      "expected": [["LINE_TOO_LONG", "long"]]
+    },
+    {
+      "name": "half-width characters count 0.5: 7 Latin letters + 7 full-width = 10.5 units fit in 13",
+      "language": "ja-JP",
+      "cues": [{"id": "c1", "start": 0, "end": 3, "text": "Netflixで新しいドラマ"}],
+      "expected": []
+    },
+    {
+      "name": "reading speed 4 characters per second: 8 in 2 s passes, 9 in 2 s does not",
+      "language": "ja",
+      "cues": [
+        {"id": "ok", "start": 0, "end": 2, "text": "ありがとうござい"},
+        {"id": "fast", "start": 2, "end": 4, "text": "ありがとうございま"}
+      ],
+      "expected": [["READING_SPEED_TOO_HIGH", "fast"]]
+    },
+    {
+      "name": "a line may not start with 。 -- reported with a kinsoku-compliant re-break",
+      "language": "ja",
+      "cues": [{"id": "c1", "start": 0, "end": 7, "text": "今日はとても良い天気ですね\n。散歩に行きましょう。"}],
+      "expected": [["KINSOKU_LINE_START", "c1"]],
+      "suggested_text": "今日はとても良い天気です\nね。散歩に行きましょう。"
+    },
+    {
+      "name": "a line may not end with 「",
+      "language": "ja",
+      "cues": [{"id": "c1", "start": 0, "end": 7, "text": "昨日、駅前で彼に「\n久しぶり」と言われた"}],
+      "expected": [["KINSOKU_LINE_END", "c1"]],
+      "suggested_text": "昨日、駅前で彼に「久しぶ\nり」と言われた"
+    },
+    {
+      "name": "small kana, ー, ）and the half-width forms ｰ ｯ may not start a line",
+      "language": "ja",
+      "cues": [
+        {"id": "small", "start": 0, "end": 4, "text": "ち\nょっと"},
+        {"id": "choon", "start": 4, "end": 8, "text": "コ\nーヒー"},
+        {"id": "paren", "start": 8, "end": 12, "text": "（笑\n）"},
+        {"id": "hw-choon", "start": 12, "end": 16, "text": "ｺ\nｰﾋｰ"},
+        {"id": "hw-small", "start": 16, "end": 20, "text": "ﾁ\nｯﾌﾟ"}
+      ],
+      "expected": [
+        ["KINSOKU_LINE_START", "small"],
+        ["KINSOKU_LINE_START", "choon"],
+        ["KINSOKU_LINE_START", "paren"],
+        ["KINSOKU_LINE_START", "hw-choon"],
+        ["KINSOKU_LINE_START", "hw-small"]
+      ]
+    },
+    {
+      "name": "a too-long line gets a two-line suggestion that obeys kinsoku",
+      "language": "ja",
+      "cues": [{"id": "c1", "start": 0, "end": 7, "text": "明日の午後三時にみんなでコーヒーを飲む"}],
+      "expected": [["LINE_TOO_LONG", "c1"]],
+      "suggested_text": "明日の午後三時にみんなで\nコーヒーを飲む"
+    },
+    {
+      "name": "no suggestion when the text cannot fit in max_lines",
+      "language": "ja",
+      "cues": [{"id": "c1", "start": 0, "end": 10, "text": "これはとても長い字幕なので二行には到底収まらないほどの長さです"}],
+      "expected": [["LINE_TOO_LONG", "c1"]],
+      "suggested_text": null
+    },
+    {
+      "name": "a well-formed two-line cue produces no observation",
+      "language": "ja",
+      "cues": [{"id": "c1", "start": 0, "end": 6, "text": "今日はとても良い天気です\nね。散歩に行きましょう。"}],
+      "expected": []
+    }
+  ]
+}

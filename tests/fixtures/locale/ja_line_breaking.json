@@ -1,0 +1,51 @@
+{
+  "description": "Japanese kinsoku line breaking (JLREQ 3.1.7 / 3.1.8, strict form) at the ja profile's 13 full-width characters per line. Each expected result was worked out by hand from the rules, not recorded from the implementation.",
+  "max_width": 13,
+  "cases": [
+    {
+      "name": "full stop pushed back: 。 may not start a line, so ね moves down with it (追い出し)",
+      "text": "今日はとても良い天気ですね。散歩に行きましょう。",
+      "expected": ["今日はとても良い天気です", "ね。散歩に行きましょう。"]
+    },
+    {
+      "name": "prolonged sound mark ー may not start a line",
+      "text": "明日の午後三時にみんなでコーヒーを飲む",
+      "expected": ["明日の午後三時にみんなで", "コーヒーを飲む"]
+    },
+    {
+      "name": "small kana ょ and っ may not start a line: the break moves back two characters",
+      "text": "わたしたちは昨日の夜にちょっと散歩した",
+      "expected": ["わたしたちは昨日の夜に", "ちょっと散歩した"]
+    },
+    {
+      "name": "opening bracket 「 may not end a line",
+      "text": "昨日、駅前の喫茶店で彼に「久しぶり」と言われた",
+      "expected": ["昨日、駅前の喫茶店で彼に", "「久しぶり」と言われた"]
+    },
+    {
+      "name": "closing bracket 」 may not start a line",
+      "text": "彼女は「また明日ね」と笑った",
+      "expected": ["彼女は「また明日ね」と笑っ", "た"]
+    },
+    {
+      "name": "ideographic comma 、 may not start a line",
+      "text": "ちょっと待ってください、すぐに行きます",
+      "expected": ["ちょっと待ってください、す", "ぐに行きます"]
+    },
+    {
+      "name": "half-width Latin counts 0.5 and a Latin word is never split",
+      "text": "Netflixで新しいドラマを見ました。",
+      "expected": ["Netflixで新しいドラマを見", "ました。"]
+    },
+    {
+      "name": "an existing line break is removed before re-breaking",
+      "text": "今日はとても良い天気ですね\n。散歩に行きましょう。",
+      "expected": ["今日はとても良い天気です", "ね。散歩に行きましょう。"]
+    },
+    {
+      "name": "text that already fits is one line",
+      "text": "おはようございます。",
+      "expected": ["おはようございます。"]
+    }
+  ]
+}

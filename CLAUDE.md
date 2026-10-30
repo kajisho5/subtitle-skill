@@ -235,6 +235,23 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Locale profiles for ja / zh / ko** (ECOSYSTEM_ROADMAP.md step 3,
+  `src/subtitle_skill/locales.py`, decision and sources in
+  `docs/adr/ADR-001-locale-profiles.md`). The primary subtag of
+  `SubtitleDocument.language` selects a profile: East Asian Width counting
+  (half-width = 0.5 for ja/ko, 1 for zh, the zh value being an explicitly
+  conservative unverified choice), Netflix-guide defaults (ja 13 chars/4
+  cps, zh 16/9, ko 16/12), and kinsoku checks at existing line breaks
+  (`KINSOKU_LINE_START` / `KINSOKU_LINE_END`, JLREQ/CLREQ/KLREQ classes).
+  `LINE_TOO_LONG`/`KINSOKU_*` observations may carry `suggested_text` (a
+  kinsoku-compliant re-break) -- reported, never applied. Every other
+  language is unchanged. **`contract --json` was deliberately left
+  unchanged**: video-production-agent treats any change to the contract's
+  `parameters`/`capabilities`/`operations` as fatal drift (its
+  `FATAL_DRIFT_KEYS`), so advertising profiles there must be coordinated
+  with its pinned `contract_0.1.0.json` first. Acceptance fixtures:
+  `tests/fixtures/locale/ja_*.json`.
+
 - **`render` forwards `SubtitleStyle.color`/`.bold`/`.size` to
   caption.py's `--color`/`--bold`/`--size`, for `mode="burn"`**
   (subtitle-skill#5, this session) — see the dedicated entry above (right
@@ -306,7 +323,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 148 tests, `pytest -q`, all passing; CI green on
+At last update: 197 tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.
