@@ -1,3 +1,7 @@
+## v0.2.0 - 2026-10-30
+
+- feat: ja/zh/ko locale profiles (width counting, kinsoku, per-locale defaults) (#19) (10020b4)
+
 ## v0.1.5 - 2026-10-30
 
 - fix: report the release version, single-sourced from pyproject.toml (#18) (b02325b)
