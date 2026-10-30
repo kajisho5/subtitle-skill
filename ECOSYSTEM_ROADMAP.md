@@ -16,7 +16,7 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
 | 字幕翻訳 | missing | owned here (owner decision 2026-10-30); engine not chosen yet |
-| ロケール別字幕整形 | missing | generic character counting only; no CJK width, kinsoku, per-locale cps |
+| ロケール別字幕整形 | done | ja/zh/ko locale profiles: East Asian Width counting, kinsoku observations, per-locale defaults ([ADR-001](docs/adr/ADR-001-locale-profiles.md)) |
 
 ## Wiring
 
@@ -28,7 +28,7 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
   - Done when: contract version == pyproject
 - [ ] **2. Align provides tool_id prefix** — `subtitle-skill/...` vs the agent's `subtitle/...`; fix or ADR
   - Done when: OS registry resolves without a mapping
-- [ ] **3. Locale profiles** — ja/zh/ko full-width counting, kinsoku line breaking, per-locale cps defaults
+- [x] **3. Locale profiles** — ja/zh/ko full-width counting, kinsoku line breaking, per-locale cps defaults
   - Done when: Japanese fixtures
 - [ ] **4. Translation engine ADR** — the owner kept 字幕翻訳 here (2026-10-30); choose an offline-capable MT engine and check the licences of its code and weights
   - Done when: the ADR is merged

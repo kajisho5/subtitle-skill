@@ -102,6 +102,18 @@ them (no cue is deleted, merged, or shifted):
 | `TOO_MANY_LINES` / `LINE_TOO_LONG` | exceeds `constraints.max_lines` / `max_chars_per_line` |
 | `CUE_TOO_SHORT` / `CUE_TOO_LONG` | outside `constraints.min_duration` / `max_duration` |
 | `READING_SPEED_TOO_HIGH` | more text than `constraints.reading_speed_cps` allows for the cue's duration |
+| `KINSOKU_LINE_START` / `KINSOKU_LINE_END` | (ja/zh/ko only) a line break leaves a character that may not begin a line (e.g. `。、」）ー ゃ っ`) at a line start, or one that may not end a line (e.g. `「『（`) at a line end |
+
+**Locale profiles (ja / zh / ko).** When `subtitle.language`'s primary
+subtag is `ja`, `zh` or `ko` (`ja-JP`, `zh-Hans`, `ko-KR`, ...), line length
+and reading speed are counted in full-width units by Unicode East Asian
+Width (a half-width Latin letter is 0.5 in ja/ko, 1 in zh) and the defaults
+become ja 13 chars/line and 4 cps, zh 16 and 9, ko 16 and 12 (Netflix
+Timed Text Style Guides; sources in `docs/adr/ADR-001-locale-profiles.md`).
+Kinsoku is checked at every existing line break. A `LINE_TOO_LONG` or
+`KINSOKU_*` observation on such a cue may carry `suggested_text`: a
+kinsoku-compliant re-break that fits your limits. It is a suggestion; the
+cue text is never changed. Every other language behaves exactly as before.
 
 Fatal problems (`VALIDATION_ERROR`, `INVALID_TIME_RANGE`, ...) raise
 before any file is written — there is no partial output to clean up.

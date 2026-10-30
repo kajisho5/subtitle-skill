@@ -282,12 +282,45 @@ past the video's actual duration.
 
 **Observation** — reported, never auto-corrected:
 `CUE_OVERLAP`, `TOO_MANY_LINES`, `LINE_TOO_LONG`, `CUE_TOO_SHORT`,
-`CUE_TOO_LONG`, `READING_SPEED_TOO_HIGH`.
+`CUE_TOO_LONG`, `READING_SPEED_TOO_HIGH`, and for ja/zh/ko
+`KINSOKU_LINE_START`, `KINSOKU_LINE_END`.
 
 Thresholds (`max_chars_per_line`, `max_lines`, `min_duration`,
 `max_duration`, `reading_speed_cps`) are caller-supplied `constraints`,
 not hard-coded domain assumptions — defaults exist only so a caller may
 omit `constraints` entirely.
+
+### Locale profiles (ja / zh / ko)
+
+The primary subtag of `subtitle.language` selects a profile
+(`src/subtitle_skill/locales.py`); every other language keeps the generic
+behavior above unchanged.
+
+| Profile | Default chars/line | Default cps | Half-width char counts as | Kinsoku classes |
+|---|---|---|---|---|
+| `ja` | 13 | 4 | 0.5 | W3C JLREQ (JIS X 4051) §3.1.7 / §3.1.8, strict |
+| `zh` | 16 | 9 | 1 (conservative: not stated by the source) | W3C CLREQ §6.1.1 "basic" |
+| `ko` | 16 | 12 | 0.5 | W3C KLREQ §7.1.2 / §7.1.3 |
+| others | 42 | 20 | 1 (`len()`) | none |
+
+- Width follows Unicode East Asian Width (UAX #11): wide, fullwidth and
+  ambiguous characters count 1; narrow, halfwidth and neutral ones count
+  the profile's half-width weight; combining marks count 0.
+- Line-length and reading-speed defaults come from the Netflix Timed Text
+  Style Guides for each language; a caller's `constraints` still win.
+- Kinsoku is checked at existing line breaks (`KINSOKU_LINE_START`: a line
+  begins with e.g. `。、」）ー ゃ っ ？`; `KINSOKU_LINE_END`: a line ends with
+  e.g. `「『（`).
+- A `LINE_TOO_LONG` / `KINSOKU_*` observation on a profiled cue can carry
+  `suggested_text`, a deterministic kinsoku-compliant re-break (moving the
+  break back, 追い出し) that fits `max_lines` and the line length. It is
+  never applied: the cue and the output file stay exactly as sent.
+- `contract --json` is unchanged by profiles (the profile is selected from
+  the existing `language` field).
+
+Every source, the exact quoted values, and the values that could not be
+verified are recorded in
+[docs/adr/ADR-001-locale-profiles.md](docs/adr/ADR-001-locale-profiles.md).
 
 ## Built for agents
 
@@ -535,8 +568,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-
-There is no separate `docs/` directory at this time.
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults |
 
 ## Limitations / Out of scope
 
