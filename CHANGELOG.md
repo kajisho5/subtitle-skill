@@ -1,3 +1,7 @@
+## v0.2.1 - 2026-10-30
+
+- fix: publish provides tool ids as subtitle/... (ADR-002) (#20) (047d570)
+
 ## v0.2.0 - 2026-10-30
 
 - feat: ja/zh/ko locale profiles (width counting, kinsoku, per-locale defaults) (#19) (10020b4)
