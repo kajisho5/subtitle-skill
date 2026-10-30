@@ -1,3 +1,7 @@
+## v0.1.5 - 2026-10-30
+
+- fix: report the release version, single-sourced from pyproject.toml (#18) (b02325b)
+
 ## v0.1.4 - 2026-10-30
 
 - docs: subtitle translation is owned here (owner decision) (#17) (c506d55)
