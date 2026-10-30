@@ -542,7 +542,7 @@ There is no separate `docs/` directory at this time.
 
 Not implemented, and not this skill's mandate — these belong to
 `video-production-agent` (decision-making) or a dedicated skill:
-automatic transcription, speaker diarization, translation, summarization,
+automatic transcription, speaker diarization, summarization,
 AI-generated or AI-edited subtitle text, automatic cue splitting,
 automatic subtitle "design" decisions, scene/semantic understanding,
 cloud upload, MCP or plugin-loader integration, arbitrary FFmpeg command
@@ -550,6 +550,10 @@ or filter execution.
 
 Not yet implemented, and not advertised in `contract --json`: `convert`,
 `offset`, `merge`, ASS/SSA generation or rendering.
+
+Translation (字幕翻訳) belongs to this skill in the AI Video Production OS
+(owner decision, 2026-10-30), but is not implemented yet: the machine-translation
+engine is chosen in an ADR first. See `ECOSYSTEM_ROADMAP.md`.
 
 ## Support
 
