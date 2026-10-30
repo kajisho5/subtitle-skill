@@ -15,7 +15,7 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 |---|---|---|
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
-| 字幕翻訳 | missing | README lists translation as out of scope -- contradicts ecosystem.json |
+| 字幕翻訳 | missing | owned here (owner decision 2026-10-30); engine not chosen yet |
 | ロケール別字幕整形 | missing | generic character counting only; no CJK width, kinsoku, per-locale cps |
 
 ## Wiring
@@ -30,9 +30,9 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
   - Done when: OS registry resolves without a mapping
 - [ ] **3. Locale profiles** — ja/zh/ko full-width counting, kinsoku line breaking, per-locale cps defaults
   - Done when: Japanese fixtures
-- [ ] **4. Translation boundary ADR (owner decision needed)** — either subtitle-skill takes translated cues per language and an MT engine is chosen, or 字幕翻訳 moves to another owner
-  - Done when: ecosystem.json and README agree
-- [ ] **5. Machine translation, if kept here** — engine chosen in the ADR, offline-capable, provenance records engine
+- [ ] **4. Translation engine ADR** — the owner kept 字幕翻訳 here (2026-10-30); choose an offline-capable MT engine and check the licences of its code and weights
+  - Done when: the ADR is merged
+- [ ] **5. Machine translation** — engine chosen in the ADR, offline-capable, provenance records engine
   - Done when: ja<->en fixture
 - [ ] **6. Multi-language mux** — several subtitle documents -> one mux
   - Done when: 2-language integration test
