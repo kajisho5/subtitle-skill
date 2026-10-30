@@ -65,7 +65,7 @@ jobs:
       - name: Draft next version from merged PR labels (no publish, no write)
         id: drafter
         if: steps.current.outputs.auto_bump == 'true' && steps.current.outputs.latest_tag != ''
-        uses: release-drafter/release-drafter@v7
+        uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0 # v7.10.0
         with:
           config-name: release-drafter.yml
           dry-run: true
