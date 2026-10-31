@@ -4,7 +4,10 @@ name: ffmpeg-skill compatibility check
 # not depend on network access to another repository (see CLAUDE.md
 # "Things intentionally NOT done, and why"). This workflow runs the test
 # suite against ffmpeg-skill's current main, so a release that breaks
-# subtitle-skill shows up, while ordinary releases pass untouched.
+# subtitle-skill shows up, while ordinary releases pass untouched. It also runs
+# against the v3.0.0 tag, the first ffmpeg-skill major that needs Python 3.10+
+# and FFmpeg 6.1+ (ci.yml's offline vendored copy stays 2.x, so Python 3.9 is
+# covered there).
 
 on:
   schedule:
@@ -16,6 +19,11 @@ permissions:
 
 jobs:
   check:
+    name: check (ffmpeg-skill ${{ matrix.ref }})
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, v3.0.0]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -29,5 +37,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
           pip install pytest
-      - name: Run the test suite against ffmpeg-skill main
-        run: python3 scripts/check_vendor_drift.py
+      - name: Run the test suite against ffmpeg-skill ${{ matrix.ref }}
+        run: python3 scripts/check_vendor_drift.py --ref "${{ matrix.ref }}"

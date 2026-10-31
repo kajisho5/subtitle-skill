@@ -352,6 +352,13 @@ Ordered by value, not urgency:
   the install at all), and 1.10 refuses to replace an existing output
   without `--overwrite` (a re-render failed). The vendored copy (0.12.2)
   stays as the offline fixture for `ci.yml`; re-vendoring it is optional.
+  Since ffmpeg-skill 3.0.0 the workflow is a matrix over `main` and the
+  `v3.0.0` tag (`check_vendor_drift.py --ref`). 3.0.0 changed only what
+  this repo does not use (`cut.py` defaults) or the environment (Python
+  3.10+, FFmpeg 6.1+); `caption`/`probe` and their JSON are unchanged, and
+  the full suite passes against it. The dependency stays `>=1.0` of
+  `contract_version` (3.0.0 reports `2.0`), with no upper bound (ADR-003).
+  `ci.yml` keeps Python 3.9 on the vendored 2.x copy.
 
 ## Things intentionally NOT done, and why
 
