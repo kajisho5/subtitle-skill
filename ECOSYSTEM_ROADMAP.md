@@ -15,7 +15,7 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 |---|---|---|
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
-| 字幕翻訳 | missing | owned here (owner decision 2026-10-30); engine not chosen yet |
+| 字幕翻訳 | missing | owned here (owner decision 2026-10-30); engine chosen: Argos Translate offline by default, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
 | ロケール別字幕整形 | done | ja/zh/ko locale profiles: East Asian Width counting, kinsoku observations, per-locale defaults ([ADR-001](docs/adr/ADR-001-locale-profiles.md)) |
 
 ## Wiring
@@ -30,7 +30,7 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
   - Done when: OS registry resolves without a mapping
 - [x] **3. Locale profiles** — ja/zh/ko full-width counting, kinsoku line breaking, per-locale cps defaults ([#19](https://github.com/kajisho5/subtitle-skill/pull/19))
   - Done when: Japanese fixtures
-- [ ] **4. Translation engine ADR** — the owner kept 字幕翻訳 here (2026-10-30); choose an offline-capable MT engine and check the licences of its code and weights
+- [x] **4. Translation engine ADR** — the owner kept 字幕翻訳 here (2026-10-30); choose an offline-capable MT engine and check the licences of its code and weights ([ADR-004](docs/adr/ADR-004-translation-engine.md), [#23](https://github.com/kajisho5/subtitle-skill/pull/23))
   - Done when: the ADR is merged
 - [ ] **5. Machine translation** — engine chosen in the ADR, offline-capable, provenance records engine
   - Done when: ja<->en fixture
