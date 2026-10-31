@@ -1,3 +1,7 @@
+## v0.2.3 - 2026-10-31
+
+- fix: single-source the version and the ffmpeg-skill dependency (roadmap step 1) (#22) (a60c26e)
+
 ## v0.2.2 - 2026-10-30
 
 - ci: stop inferring major from PR titles; pin third-party actions by SHA (#21) (1606655)
