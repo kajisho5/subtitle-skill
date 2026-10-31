@@ -24,7 +24,7 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
 
 ## Steps
 
-- [ ] **1. Single-source the version + dependencies**
+- [x] **1. Single-source the version + dependencies** — version from pyproject.toml only, `dependencies` on ffmpeg-skill `>=1.0` from one constant ([ADR-003](docs/adr/ADR-003-single-source-version.md), [#22](https://github.com/kajisho5/subtitle-skill/pull/22))
   - Done when: contract version == pyproject
 - [x] **2. Align provides tool_id prefix** — `subtitle-skill/...` vs the agent's `subtitle/...`; fix or ADR ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md), [#20](https://github.com/kajisho5/subtitle-skill/pull/20))
   - Done when: OS registry resolves without a mapping
