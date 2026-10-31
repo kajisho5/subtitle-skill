@@ -1,3 +1,7 @@
+## v0.3.0 - 2026-10-31
+
+- feat: machine translation and multi-language mux (roadmap steps 5 and 6) (#24) (69159a2)
+
 ## v0.2.4 - 2026-10-31
 
 - docs: choose the subtitle translation engine (ADR-004, roadmap step 4) (#23) (4b9c1b9)
