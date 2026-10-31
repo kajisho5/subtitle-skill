@@ -1,3 +1,7 @@
+## v0.2.4 - 2026-10-31
+
+- docs: choose the subtitle translation engine (ADR-004, roadmap step 4) (#23) (4b9c1b9)
+
 ## v0.2.3 - 2026-10-31
 
 - fix: single-source the version and the ffmpeg-skill dependency (roadmap step 1) (#22) (a60c26e)
