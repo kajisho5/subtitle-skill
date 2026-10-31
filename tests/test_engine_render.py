@@ -339,7 +339,7 @@ def test_render_accepts_cue_within_real_video_duration_without_hint(tmp_path, ff
 
 
 # --- mode="mux", audio_stream, and document.language forwarding (subtitle-skill#3 fix B) ---
-# Exercised against the re-vendored real caption.py (0.12.2, subtitle-skill#3 fix A), which is
+# Exercised against the re-vendored real caption.py (0.12.2 for subtitle-skill#3 fix A, 2.24.0 since roadmap step 6), which is
 # where --mode mux / --audio-stream / mux's --language tagging actually live.
 
 

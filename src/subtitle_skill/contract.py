@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from .doctor import RENDER_SUPPORTED_FORMATS
-from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS
+from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS, MUX_CONTAINERS
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
+from .translation import DEFAULT_ENGINE, ENGINES
 
-OPERATIONS = ("generate", "render")
+OPERATIONS = ("generate", "render", "translate", "mux")
 
 # Cross-repository Capability ids (kajisho5/AI-video-production-OS docs/SPEC.md
 # `CapabilityContract.provides`), so a registry can resolve "who provides
@@ -19,6 +20,9 @@ OPERATIONS = ("generate", "render")
 PROVIDES = {
     "generate": "subtitle.generate",
     "render": "subtitle.render",
+    # AI-video-production-OS docs/DELIVERY_AND_INTEROP.md section 8 names this Capability.
+    "translate": "subtitle.translate",
+    "mux": "subtitle.mux",
 }
 
 # Prefix of every `provides[].tool_id` (docs/adr/ADR-002-provides-tool-id-prefix.md). It is
@@ -44,7 +48,7 @@ def dependencies() -> list:
             "version_range": f">={FFMPEG_SKILL_CONTRACT_VERSION}",
             "range_of": "contract_version",
             "required": False,
-            "for": [f"{TOOL_ID_PREFIX}/render"],
+            "for": [f"{TOOL_ID_PREFIX}/render", f"{TOOL_ID_PREFIX}/mux"],
             "tools": [f"ffmpeg-skill/{tool}" for tool in FFMPEG_SKILL_TOOLS],
         }
     ]
@@ -91,6 +95,73 @@ def build_contract() -> dict:
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
             },
+            "translate": {
+                "description": (
+                    "Machine-translate a typed subtitle document into target_language and write it as SRT or "
+                    "WebVTT (docs/adr/ADR-004-translation-engine.md). Cue ids and start/end times are kept "
+                    "exactly; each cue is translated as one segment and re-broken for the target language "
+                    "(locale profiles for ja/zh/ko, word wrap otherwise), then validated with the target "
+                    "language's line-length and reading-speed limits (observations, never rewrites). "
+                    "engine: 'argos' (default, offline Argos Translate; the language package must already be "
+                    "installed, nothing is downloaded), 'deepl' (DeepL API, key only from the DEEPL_AUTH_KEY "
+                    "environment variable) or 'memory' (exact source->target pairs in translation_memory; "
+                    "deterministic, no model). glossary terms are sent as a DeepL glossary or substituted "
+                    "into the source for Argos, and checked in every output (GLOSSARY_TERM_MISSING). The "
+                    "response carries the translated document as `subtitle`, ready for mux or render."
+                ),
+                "inputs": [
+                    "subtitle",
+                    "target_language",
+                    "format",
+                    "output_path",
+                    "engine?",
+                    "glossary?",
+                    "translation_memory?",
+                    "constraints?",
+                ],
+                "outputs": [
+                    "output",
+                    "sha256",
+                    "size",
+                    "timeline",
+                    "observation",
+                    "subtitle",
+                    "engine",
+                    "engine_version",
+                    "source_language",
+                    "target_language",
+                ],
+                "formats": list(SUPPORTED_FORMATS),
+                "engines": list(ENGINES),
+                "default_engine": DEFAULT_ENGINE,
+                "deterministic_engines": ["memory"],
+            },
+            "mux": {
+                "description": (
+                    "Mux several subtitle documents (one per language) into one video as language-tagged, "
+                    "player-toggleable subtitle tracks, in one ffmpeg-skill `caption --mode mux` call "
+                    "(`--srt FILE:LANG` per track; ffmpeg-skill 1.16+ for more than one track). Video and "
+                    "audio are copied untouched. The codec follows the output container: mov_text for "
+                    ".mp4/.m4v/.mov (whose language tag ffmpeg-skill writes as ISO 639-2, e.g. jpn), SubRip "
+                    "for .mkv, WebVTT for .webm. Each track's language is its document's `language`; two "
+                    "tracks may not share one. `default_language` marks one track default (an MPEG-4 file "
+                    "always enables its first track). Every document is validated against the probed video "
+                    "duration; timing is passed through unchanged."
+                ),
+                "inputs": [
+                    "video_input",
+                    "tracks",
+                    "output_path",
+                    "default_language?",
+                    "audio_stream?",
+                    "constraints?",
+                    "format?",
+                ],
+                "outputs": ["output", "sha256", "size", "timeline", "observation", "engine", "mode", "tracks"],
+                "formats": list(RENDER_SUPPORTED_FORMATS),
+                "containers": sorted(MUX_CONTAINERS),
+                "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
+            },
         },
         "provides": [
             {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{TOOL_ID_PREFIX}/{op}"}
@@ -101,6 +172,8 @@ def build_contract() -> dict:
             "formats": list(SUPPORTED_FORMATS),
             "render_formats": list(RENDER_SUPPORTED_FORMATS),
             "render_modes": sorted(ALLOWED_RENDER_MODES),
+            "translation_engines": list(ENGINES),
+            "mux_containers": sorted(MUX_CONTAINERS),
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -115,6 +188,8 @@ def build_contract() -> dict:
             ],
             "style": ["align", "position", "line", "size", "bold", "italic", "color"],
             "render": ["mode", "audio_stream"],
+            "translate": ["target_language", "engine", "glossary", "translation_memory"],
+            "mux": ["tracks", "default_language", "audio_stream"],
         },
         "errors": {
             "codes": sorted(ERROR_CODES),

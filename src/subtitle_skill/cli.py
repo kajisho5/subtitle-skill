@@ -132,7 +132,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_stdio() -> None:
+    """The JSON boundary is UTF-8 on every OS. On Windows a pipe otherwise
+    takes the ANSI code page, so a Japanese cue could not be printed (or read
+    from stdin) at all; elsewhere this is already the encoding in use."""
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):  # pragma: no cover - a detached or replaced stream
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

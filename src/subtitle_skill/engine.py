@@ -12,7 +12,10 @@ This module's shape was verified against kajisho5/ffmpeg-skill (commit
 version 0.12.2) -- specifically `docs/contract.md`, `scripts/_contract.py`,
 `scripts/caption.py` and `scripts/_common.py` -- and confirmed by actually
 running `scripts/caption.py` and `scripts/probe.py` against a real video,
-not by assumption. See README "ffmpeg-skill integration" for the
+not by assumption. `mux_tracks` (roadmap step 6) was written against
+ffmpeg-skill 2.24.0 (commit 86b5145c86824309cb8cadea9739e217580204bc), the
+current test fixture: repeatable `--srt FILE:LANG`, `--track-title` and
+`--default-track` exist since 1.16.0. See README "ffmpeg-skill integration" for the
 citations. (Previously verified against commit 2abd89c / skill version
 0.9.1; re-verified after re-vendoring for kajisho5/subtitle-skill#3 --
 `caption.py` gained `--mode mux` and `--audio-stream` in the interim,
@@ -85,6 +88,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -579,4 +583,148 @@ def burn_in(
     response = dict(response)
     response["engine_skill_version"] = ffmpeg_skill_version(root)
     response["engine_script_sha256"] = ffmpeg_skill_script_hash(root)
+    return response
+
+
+#: Output containers `mux` writes, and the soft-subtitle codec ffmpeg-skill's
+#: caption.py picks for each (its `mux_subtitle_codec`, verified against
+#: ffmpeg-skill 2.24.0): mov_text for MPEG-4/QuickTime, SubRip for Matroska,
+#: WebVTT for WebM. ASS is not muxed: caption.py refuses `--mode mux --ass`.
+MUX_CONTAINERS = {".mp4": "mov_text", ".m4v": "mov_text", ".mov": "mov_text", ".mkv": "srt", ".webm": "webvtt"}
+
+#: caption.py's own `--srt FILE:LANG` language grammar (its LANG_TOKEN_RE): a
+#: 2-3 letter lowercase primary subtag, then 2-8 character subtags.
+MUX_LANGUAGE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
+
+
+def _caption_source(root: Path) -> str:
+    try:
+        return (root / "scripts" / "caption.py").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def caption_supports_multitrack(root: Path) -> bool:
+    """ffmpeg-skill 1.16+: `--srt` repeatable with a `:lang` suffix,
+    `--track-title`, `--default-track` (its CHANGELOG 1.16.0)."""
+    source = _caption_source(root)
+    return '"--track-title"' in source and '"--default-track"' in source
+
+
+def mux_tracks(
+    *,
+    video_path: Path,
+    tracks: list,
+    output_path: Path,
+    audio_stream: Optional[int] = None,
+    default_language: Optional[str] = None,
+    timeout_seconds: int = 600,
+) -> dict:
+    """Mux several SRT files into one video as language-tagged soft subtitle
+    tracks, through ffmpeg-skill's `caption.py --mode mux` (one call, every
+    `--srt FILE:LANG` in order). `tracks` is a list of `(srt_path, language,
+    title_or_None)`; languages must already match `MUX_LANGUAGE_RE` and be
+    unique (caption.py refuses two tracks with one code).
+
+    The SRT files are subtitle-skill's own, already laid out and validated, so
+    caption.py is told not to re-time them: `--min-duration 0` (its default
+    lengthens cues shorter than 1 s) and a `--max-lines` no cue reaches (its
+    default splits a cue past 2 lines). Without these the FIRST track -- the
+    only one caption.py lays out -- would come out with different timing from
+    the others.
+
+    Video and audio are copied untouched. Verified after the run: the output
+    exists, has a video stream, keeps the input's duration, and caption.py
+    reports exactly one new subtitle track per requested track, in order.
+    """
+    root = resolve_ffmpeg_skill_root()
+    if root is None:
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            f"ffmpeg-skill install not found (checked {FFMPEG_SKILL_DIR_ENV} and the standard "
+            "~/.claude, ~/.cursor, ~/.codex and ./.claude skills directories)",
+        )
+    if output_path.suffix.lower() not in MUX_CONTAINERS:
+        raise SubtitleSkillError(
+            "INVALID_INPUT",
+            f"mux output must be one of {sorted(MUX_CONTAINERS)}, got {output_path.suffix or 'no extension'!r}",
+        )
+    if not tracks:
+        raise SubtitleSkillError("MISSING_INPUT", "mux needs at least one track")
+    multitrack = caption_supports_multitrack(root)
+    titles = [t[2] for t in tracks]
+    if not multitrack and (len(tracks) > 1 or any(titles) or default_language):
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            "the installed ffmpeg-skill caption tool cannot mux several language-tagged tracks, track titles "
+            "or a default track (needs ffmpeg-skill 1.16 or later)",
+        )
+
+    input_probe = probe(root, video_path, timeout_seconds=timeout_seconds)
+    if not input_probe.get("video"):
+        raise SubtitleSkillError("INVALID_INPUT", f"input has no video stream: {video_path}")
+    input_duration = input_probe.get("duration")
+    max_lines = 1
+    for path, _lang, _title in tracks:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise SubtitleSkillError("OUTPUT_ERROR", f"could not read generated SRT {path}: {exc}") from exc
+        for block in text.replace("\r\n", "\n").split("\n\n"):
+            lines = [ln for ln in block.split("\n") if ln.strip()]
+            max_lines = max(max_lines, len(lines) - 2)
+
+    argv = [str(video_path), "-o", str(output_path), "--mode", "mux"]
+    if multitrack:
+        for path, lang, _title in tracks:
+            argv += ["--srt", f"{path}:{lang}"]
+        if any(titles):
+            for title in titles:
+                argv += ["--track-title", title]
+        if default_language:
+            argv += ["--default-track", default_language]
+    else:
+        path, lang, _title = tracks[0]
+        argv += ["--srt", str(path), "--language", lang]
+    source = _caption_source(root)
+    if '"--min-duration"' in source:
+        argv += ["--min-duration", "0"]
+    if '"--max-lines"' in source:
+        argv += ["--max-lines", str(max_lines + 1)]
+    if _caption_takes_overwrite(root):
+        argv.append("--overwrite")
+    if audio_stream is not None:
+        argv += ["--audio-stream", str(audio_stream)]
+
+    response = _run_tool(root, "caption", argv, timeout_seconds=timeout_seconds)
+
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise SubtitleSkillError("OUTPUT_ERROR", "ffmpeg-skill/caption reported success but output is missing/empty")
+    output_probe = response.get("probe")
+    if not isinstance(output_probe, dict) or not output_probe.get("video"):
+        raise SubtitleSkillError("OUTPUT_ERROR", "ffmpeg-skill/caption reported success but the output has no video stream")
+    output_duration = output_probe.get("duration")
+    if (
+        isinstance(input_duration, (int, float))
+        and isinstance(output_duration, (int, float))
+        and abs(output_duration - input_duration) > _DURATION_TOLERANCE_SECONDS
+    ):
+        raise SubtitleSkillError(
+            "OUTPUT_ERROR",
+            f"output duration {output_duration}s differs from input duration {input_duration}s "
+            f"by more than {_DURATION_TOLERANCE_SECONDS}s",
+        )
+    reported = response.get("tracks")
+    if multitrack:
+        added = [t for t in reported or [] if isinstance(t, dict) and not t.get("kept_from_input")]
+        if len(added) != len(tracks):
+            raise SubtitleSkillError(
+                "OUTPUT_ERROR",
+                f"ffmpeg-skill/caption reported {len(added)} new subtitle track(s), expected {len(tracks)}",
+            )
+
+    response = dict(response)
+    response["engine_skill_version"] = ffmpeg_skill_version(root)
+    response["engine_script_sha256"] = ffmpeg_skill_script_hash(root)
+    response["codec"] = MUX_CONTAINERS[output_path.suffix.lower()]
     return response

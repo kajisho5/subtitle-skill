@@ -1,6 +1,6 @@
 ---
 name: subtitle-skill
-description: Deterministic subtitle validation, SRT/WebVTT generation, and video caption burn-in. Given an already-decided, typed subtitle document (cue text, timing, optional speaker/style), validate its timeline, generate an SRT or WebVTT file, or burn it into a video by delegating to ffmpeg-skill's caption tool. Use this skill only after another agent has already decided what the subtitle cues should say and how they should be split -- it performs no transcription, no diarization, no cue-splitting judgement, and no "does this look right" visual check.
+description: Deterministic subtitle validation, SRT/WebVTT generation, video caption burn-in, machine translation of subtitle documents (offline Argos Translate, optional DeepL, or a caller translation memory; timecodes kept, line length and reading speed re-checked for the target language), and multi-language soft-subtitle mux. Given an already-decided, typed subtitle document (cue text, timing, optional speaker/style), validate its timeline, generate an SRT or WebVTT file, translate it, or burn/mux it into a video by delegating to ffmpeg-skill's caption tool. Use this skill only after another agent has already decided what the subtitle cues should say and how they should be split -- it performs no transcription, no diarization, no cue-splitting judgement, and no "does this look right" visual check.
 ---
 
 # subtitle-skill
@@ -19,7 +19,11 @@ start/end timestamps, decided by you or an upstream step — and need to:
 - validate that timeline (catch overlaps, bad timestamps, unreadable
   cues) before shipping it,
 - turn it into an SRT or WebVTT file,
-- burn it into a video.
+- burn it into a video,
+- machine-translate it into another language with the same timecodes
+  (`translate`),
+- mux several languages into one video as switchable subtitle tracks
+  (`mux`).
 
 Do **not** use subtitle-skill to:
 
@@ -27,7 +31,9 @@ Do **not** use subtitle-skill to:
 - decide how to split a long sentence into cues, whether to show a
   speaker label, or word subtitle text — that judgement is yours; hand
   subtitle-skill the finished `SubtitleCue`s, not a `TranscriptSegment`,
-- translate, summarize, or rewrite subtitle text,
+- summarize or rewrite subtitle text (`translate` hands each cue to the
+  chosen engine and reports what does not fit; it never shortens or
+  rewords a translation),
 - decide *whether* a render "looks good" — subtitle-skill's render
   verification is limited to what a machine can check (file exists, has
   a video stream, duration preserved); it does not run or interpret
@@ -157,6 +163,35 @@ can omit `constraints` entirely.
     silently dropped from that container's stream tags with no error.
     Use `.mkv`/`.webm` output when the exact tag value must survive.
 
+## `translate` and `mux`
+
+- **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`),
+  `output_path`, optional `engine`, `glossary`, `translation_memory`,
+  `constraints`. Cue ids and start/end times are copied; each cue is one
+  segment; the text is re-broken for the target language and validated
+  with the target's limits (`constraints` are the *target's*). Read the
+  response's `subtitle` (the translated document) to feed `mux` or
+  `render`.
+  - `engine: "argos"` (default) is offline and needs `argostranslate` plus
+    an already-installed language package; subtitle-skill never
+    downloads one. Missing → `DEPENDENCY_ERROR`, not retryable until the
+    environment changes.
+  - `engine: "deepl"` needs `DEEPL_AUTH_KEY` in the environment. Never put
+    a key in the request (`api_key` is refused anywhere).
+  - `engine: "memory"` looks up exact source → target pairs you pass in
+    `translation_memory`: use it to apply a translation you (or a human)
+    already made, and still get timing, layout and glossary checks.
+    A segment with no entry → `MISSING_INPUT` listing the segments.
+  - `GLOSSARY_TERM_MISSING` / `READING_SPEED_TOO_HIGH` / `LINE_TOO_LONG`
+    observations are yours to act on (re-translate, shorten, re-time).
+- **`mux`**: `video_input`, `output_path` (`.mkv` recommended; `.mp4`/
+  `.mov` use mov_text with ISO 639-2 tags and many players show only the
+  first track), `tracks: [{subtitle, title?}]`, optional
+  `default_language`, `audio_stream`. One track per language; titles on
+  all tracks or none. Timing passes through unchanged. Needs ffmpeg-skill
+  1.16+ for more than one track (`doctor --json` lists `mux` only when
+  ffmpeg-skill is usable at all).
+
 ## ffmpeg-skill dependency
 
 `render` only works when an ffmpeg-skill install with a working `caption`
@@ -171,8 +206,8 @@ the environment (install ffmpeg-skill / ffmpeg) or fall back to
 
 ## Unsupported operation / format
 
-Only `generate` and `render` are implemented; only those two appear in
-`contract --json`'s `operations`. If you need `convert`, `validate`
+Only `generate`, `render`, `translate` and `mux` are implemented; only
+those appear in `contract --json`'s `operations`. If you need `convert`, `validate`
 (standalone), `offset`, or `merge`, they do not exist yet — do not guess
 at a request shape for them; they return `UNSUPPORTED_OPERATION`.
 

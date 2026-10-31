@@ -58,7 +58,7 @@ def test_ffmpeg_skill_dependency_is_a_lower_bound_from_the_engine_constant():
         "version_range": f">={FFMPEG_SKILL_CONTRACT_VERSION}",
         "range_of": "contract_version",
         "required": False,
-        "for": ["subtitle/render"],
+        "for": ["subtitle/render", "subtitle/mux"],
         "tools": [f"ffmpeg-skill/{tool}" for tool in FFMPEG_SKILL_TOOLS],
     }]
     assert deps[0]["version_range"] == ">=1.0"

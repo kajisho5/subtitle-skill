@@ -45,7 +45,11 @@ actually correct.
 
 If a typed `SubtitleDocument` and (for burn-in) an ffmpeg-skill install
 are on hand, it works: no network access, no API keys, nothing decided
-that wasn't handed to it.
+that wasn't handed to it. Machine translation (`translate`) follows the
+same rule by default: the offline Argos Translate engine or a
+caller-supplied translation memory; the DeepL API is an opt-in engine
+that needs a key in the environment
+([ADR-004](docs/adr/ADR-004-translation-engine.md)).
 
 ---
 
@@ -193,7 +197,7 @@ These are the rules the code enforces — not aspirations.
 
 ## Operations
 
-Two operations exist. Both appear in `contract --json`; nothing else
+Four operations exist. All appear in `contract --json`; nothing else
 does — `convert`, `offset`, `merge`, and ASS/SSA are not implemented and
 cannot be called.
 
@@ -201,6 +205,8 @@ cannot be called.
 |---|---|---|---|
 | `generate` | none | SRT, WebVTT | Validate the document, write a subtitle file |
 | `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in (or mux) to ffmpeg-skill's `caption` tool, verify the output |
+| `translate` | none | SRT, WebVTT | Machine-translate a document into `target_language`: same cue ids and timecodes, text re-broken and re-validated for the target language, glossary checked ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
+| `mux` | required | **SRT only** | Several documents (one per language) → one video with language-tagged soft subtitle tracks, in one ffmpeg-skill `caption --mode mux` call ([ADR-005](docs/adr/ADR-005-multi-language-mux.md)) |
 
 `render`'s `mode` (default `"burn"`, or `"mux"`) and `audio_stream`
 (0-based, optional) map directly onto ffmpeg-skill `caption.py`'s own
@@ -208,18 +214,71 @@ cannot be called.
 [ffmpeg-skill integration](#ffmpeg-skill-integration) for exactly what
 each does and `subtitle.language`'s forwarding as the mux language tag.
 
+### `translate`
+
+```json
+{
+  "operation": "translate",
+  "workspace": "/absolute/path/to/workspace",
+  "subtitle": {"id": "ep01", "language": "ja", "cues": [{"id": "1", "start": 0.5, "end": 3.0, "text": "今日は字幕の\n翻訳を試します。"}]},
+  "target_language": "en",
+  "format": "srt",
+  "output_path": "ep01.en.srt",
+  "engine": "argos | deepl | memory",
+  "glossary": [{"source": "字幕", "target": "subtitles"}],
+  "translation_memory": [{"source": "今日は字幕の翻訳を試します。", "target": "Today we will try translating subtitles."}],
+  "constraints": {"max_chars_per_line": 42}
+}
+```
+
+| `engine` | Needs | Network | Glossary |
+|---|---|---|---|
+| `argos` (default) | `pip install argostranslate` and an **already installed** language package (`argospm install translate-ja_en`). subtitle-skill never downloads a model, and refuses Argos when it is set to a remote provider | never | each source term is replaced by its target term before translating |
+| `deepl` | `DEEPL_AUTH_KEY` in the environment (never in the request: `api_key` is a forbidden field). A key ending in `:fx` uses `api-free.deepl.com`; `SUBTITLE_SKILL_DEEPL_API_URL` overrides the URL | yes | a native DeepL glossary, created for the call and deleted after |
+| `memory` | `translation_memory`: exact source → target pairs (whitespace-insensitive) from a human, an earlier job or an agent's own translation | never | the stored targets are used as given |
+
+- **Timecodes are kept.** `id`, `start`, `end`, `speaker` and `style` are copied; each cue's lines are joined and translated as one segment, so timing is never stretched, merged or split.
+- **Constraints apply again in the target language.** The translation is re-broken with the target's locale profile (ja/zh/ko: full-width counting and kinsoku) or wrapped at spaces, preferring a natural break (after punctuation; in Japanese after a particle) and then the shortest longer line. The translated document is then validated with the target's line length and reading speed; what still does not fit is an observation, never a rewrite.
+- **Glossary terms are checked** in every engine's output: a missing target term is a `GLOSSARY_TERM_MISSING` observation.
+- The response's `subtitle` is the translated document (each cue's `metadata.translation.source_text` keeps the original); `engine` / `engine_version` (Argos and model package version, `deepl-api v2`, or the memory's hash) are recorded in the sidecar and in `subtitle.metadata.translation`, and are part of the reuse identity, so a repeated request is never translated (or billed) twice.
+- `doctor --json` lists which engines can run here under `translation_engines`. The quality of Argos on Japanese is not measured here, and the licence of the Argos model packages is not stated in its index: check the credits in the package before shipping ([ADR-004](docs/adr/ADR-004-translation-engine.md)).
+
+### `mux`
+
+```json
+{
+  "operation": "mux",
+  "workspace": "/absolute/path/to/workspace",
+  "video_input": "ep01.mp4",
+  "output_path": "ep01.subs.mkv",
+  "tracks": [
+    {"subtitle": {"id": "ep01", "language": "ja", "cues": [...]}, "title": "日本語"},
+    {"subtitle": {"id": "ep01.en", "language": "en", "cues": [...]}, "title": "English"}
+  ],
+  "default_language": "en",
+  "audio_stream": 0
+}
+```
+
+- One `caption.py --mode mux` call with `--srt FILE:LANG` per track (ffmpeg-skill 1.16+ for more than one track, titles or a default track). Video and audio are copied untouched.
+- The subtitle codec follows the container: `mov_text` in `.mp4`/`.m4v`/`.mov`, SubRip in `.mkv`, WebVTT in `.webm`. MPEG-4 stores ISO 639-2 language codes, so ffmpeg-skill writes `ja` as `jpn` and `en` as `eng` (reported as `tracks[].stored_language`); Matroska keeps the tag as given. MPEG-4 also drops track titles and always enables its first subtitle track. `.mkv` is the honest multi-language container.
+- Each track's language is its document's `language`; two tracks may not share one. A title goes on every track or on none.
+- Every document is validated against ffmpeg-skill's probed duration (a cue past the end rejects the request, with the track's language in the cue id: `ja:2`). Timing passes through unchanged: caption.py is told not to lengthen or split cues (`--min-duration 0`, a `--max-lines` no cue reaches), which it would otherwise do to the first track only. It can still re-wrap the first track's lines for a narrow frame (it has no switch for that); when it does, the response carries a `TRACK_RELAID_OUT` observation.
+- ASS tracks are not muxed: subtitle-skill generates no ASS, and caption.py refuses `--mode mux --ass`.
+
 `contract --json` also publishes `provides`: `generate` as Capability id
-`subtitle.generate`, `render` as `subtitle.render` — the cross-repository
+`subtitle.generate`, `render` as `subtitle.render`, `translate` as
+`subtitle.translate` and `mux` as `subtitle.mux` — the cross-repository
 identifiers a registry (see `kajisho5/AI-video-production-OS`) can resolve
 to this Skill without hardcoding it. Each entry's `tool_id` is
-`subtitle/generate` / `subtitle/render`: the short `subtitle/` prefix that
+`subtitle/<operation>`: the short `subtitle/` prefix that
 video-production-agent registers this Skill under, while `skill_id` stays
 `subtitle-skill` ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md)).
 Additive; not a behavior change to either operation.
 
 It also publishes `dependencies`: ffmpeg-skill, as a lower bound on its
 `contract_version` (`>=1.0`, the one `engine.py` was written against), not
-required (only `render` uses it, through `caption` and `probe`). `version` is
+required (only `render` and `mux` use it, through `caption` and `probe`). `version` is
 read from `pyproject.toml`, the only place it is written
 ([ADR-003](docs/adr/ADR-003-single-source-version.md)).
 
@@ -521,7 +580,7 @@ wanted, belongs to whoever is driving the render.
 | Result | Measurement |
 |---|---|
 | **148 / 148** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, `SubtitleStyle` → caption.py wiring, and render delegation (burn and mux) |
-| **against real ffmpeg-skill** | render tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common.py` / `_contract.py` (kajisho5/ffmpeg-skill, skill version 0.12.2) — not a hand-rolled stub — including a real burn-in and a real mux, each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux, `--color`/`--bold`/`--size` for styled burns) |
+| **against real ffmpeg-skill** | render and mux tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common/` / `_contract.py` and the two helpers `caption.py` imports (kajisho5/ffmpeg-skill, skill version 2.24.0) — not a hand-rolled stub — including a real burn-in, a real mux and a real two-language mux (`.mkv` and `.mp4`), each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux, `--color`/`--bold`/`--size` for styled burns) |
 | **ffmpeg-skill compatibility checked daily** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main and runs the test suite against it, separately from normal-PR CI; a new release fails it only if subtitle-skill actually breaks |
 | **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
@@ -577,14 +636,16 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux |
+| [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope
 
 Not implemented, and not this skill's mandate — these belong to
 `video-production-agent` (decision-making) or a dedicated skill:
 automatic transcription, speaker diarization, summarization,
-AI-generated or AI-edited subtitle text, automatic cue splitting,
+AI-generated or AI-edited subtitle text (the `translate` operation hands
+the text to the chosen engine as-is and never rewrites its output), automatic cue splitting,
 automatic subtitle "design" decisions, scene/semantic understanding,
 cloud upload, MCP or plugin-loader integration, arbitrary FFmpeg command
 or filter execution.
@@ -593,8 +654,11 @@ Not yet implemented, and not advertised in `contract --json`: `convert`,
 `offset`, `merge`, ASS/SSA generation or rendering.
 
 Translation (字幕翻訳) belongs to this skill in the AI Video Production OS
-(owner decision, 2026-10-30), but is not implemented yet: the machine-translation
-engine is chosen in an ADR first. See `ECOSYSTEM_ROADMAP.md`.
+(owner decision, 2026-10-30) and is the `translate` operation
+([ADR-004](docs/adr/ADR-004-translation-engine.md)). Its known gaps: a sentence
+split over two cues is translated as two segments; glossary matching is exact
+(no inflection or case folding on the source side); Google Cloud Translation and
+LLM engines are not implemented. `mux` does not carry ASS tracks.
 
 ## Support
 
