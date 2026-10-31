@@ -36,7 +36,7 @@ Agent wires generate and render (burn); render's mux mode, audio_stream, transla
   - Done when: ja<->en fixture
 - [x] **6. Multi-language mux** — several subtitle documents -> one mux (`mux`: one ffmpeg-skill `caption --mode mux` call, mov_text in .mp4, SubRip in .mkv, language-tagged; `tests/test_mux.py` two-language .mkv/.mp4 and translate→mux tests; [ADR-005](docs/adr/ADR-005-multi-language-mux.md), [#24](https://github.com/kajisho5/subtitle-skill/pull/24))
   - Done when: 2-language integration test
-- [x] **7. English-facing engines: Argos weight licence + commercial-safe ja→en** — the Argos ja→en package's own `metadata.json`/README state no licence (unverified, ADR-004 addendum); optional `opus-mt` (Helsinki-NLP OPUS-MT on CTranslate2, Apache-2.0 weights) and `ollama` (local Qwen3 via Ollama's HTTP API) engines, `argos` stays the default, `doctor` reports each engine's weight licence ([PR_LINK])
+- [x] **7. English-facing engines: Argos weight licence + commercial-safe ja→en** — the Argos ja→en package's own `metadata.json`/README state no licence (unverified, ADR-004 addendum); optional `opus-mt` (Helsinki-NLP OPUS-MT on CTranslate2, Apache-2.0 weights) and `ollama` (local Qwen3 via Ollama's HTTP API) engines, `argos` stays the default, `doctor` reports each engine's weight licence ([#25](https://github.com/kajisho5/subtitle-skill/pull/25))
   - Done when: both engines tested with mocks, no model downloaded in CI
 
 ## Boundaries
