@@ -1,3 +1,7 @@
+## v0.4.0 - 2026-10-31
+
+- feat(translate): Argos weight licence check; add opus-mt and ollama engines (#25) (58e4882)
+
 ## v0.3.0 - 2026-10-31
 
 - feat: machine translation and multi-language mux (roadmap steps 5 and 6) (#24) (69159a2)
