@@ -217,6 +217,12 @@ video-production-agent registers this Skill under, while `skill_id` stays
 `subtitle-skill` ([ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md)).
 Additive; not a behavior change to either operation.
 
+It also publishes `dependencies`: ffmpeg-skill, as a lower bound on its
+`contract_version` (`>=1.0`, the one `engine.py` was written against), not
+required (only `render` uses it, through `caption` and `probe`). `version` is
+read from `pyproject.toml`, the only place it is written
+([ADR-003](docs/adr/ADR-003-single-source-version.md)).
+
 ```json
 {
   "operation": "generate | render",
@@ -571,7 +577,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source |
 
 ## Limitations / Out of scope
 
