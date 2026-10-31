@@ -2,7 +2,8 @@
 
 No test here downloads a model or reaches the network: `memory` needs
 neither, Argos is replaced by a fake `argostranslate` package in
-`sys.modules`, and DeepL by a fake HTTP function.
+`sys.modules`, OPUS-MT by fake `ctranslate2`/`sentencepiece` modules over an
+empty model directory, and DeepL and Ollama by fake HTTP functions.
 """
 import json
 import subprocess
@@ -431,9 +432,204 @@ def test_doctor_lists_translation_engines(monkeypatch):
     from subtitle_skill.doctor import build_doctor_report
 
     monkeypatch.delenv(translation.DEEPL_KEY_ENV, raising=False)
+    monkeypatch.delenv(translation.OLLAMA_MODEL_ENV, raising=False)
     report = build_doctor_report()
     assert "translate" in report["supported_operations"]
     engines = report["translation_engines"]
     assert engines["memory"]["available"] is True
     assert engines["deepl"]["available"] is False and engines["deepl"]["offline"] is False
     assert engines["argos"]["offline"] is True
+    assert engines["argos"]["weights_licence"].startswith("unverified")
+    assert engines["opus-mt"]["offline"] is True and "Apache-2.0" in engines["opus-mt"]["weights_licence"]
+    assert engines["ollama"]["model"] == translation.OLLAMA_DEFAULT_MODEL
+
+
+# --------------------------------------------------------------------------
+# OPUS-MT on CTranslate2 (fake modules; no model is downloaded or loaded)
+# --------------------------------------------------------------------------
+
+
+class _FakeCT2:
+    def __init__(self):
+        self.loaded = []
+        self.batches = []
+        fake = self
+
+        class Translator:
+            def __init__(self, path, device="cpu", **_k):
+                fake.loaded.append((path, device))
+
+            def translate_batch(self, batch, **kwargs):
+                fake.batches.append((batch, kwargs))
+                # "translate" by upper-casing the pieces; keep the eos token
+                # out of the output as CTranslate2 does
+                return [
+                    types.SimpleNamespace(hypotheses=[[t.upper() for t in tokens if t != "</s>"]])
+                    for tokens in batch
+                ]
+
+        class SentencePieceProcessor:
+            def __init__(self, model_file):
+                self.model_file = model_file
+
+            def encode(self, text, out_type=str):
+                assert out_type is str
+                return ["\u2581" + w for w in text.split()]
+
+            def decode(self, pieces):
+                return "".join(pieces).replace("\u2581", " ").strip()
+
+        self.ctranslate2 = types.ModuleType("ctranslate2")
+        self.ctranslate2.Translator = Translator
+        self.sentencepiece = types.ModuleType("sentencepiece")
+        self.sentencepiece.SentencePieceProcessor = SentencePieceProcessor
+
+    def install(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "ctranslate2", self.ctranslate2)
+        monkeypatch.setitem(sys.modules, "sentencepiece", self.sentencepiece)
+
+
+def _opus_root(tmp_path, pair="ja-en"):
+    root = tmp_path / "models"
+    model = root / f"opus-mt-{pair}"
+    model.mkdir(parents=True)
+    for name in translation.OPUS_MT_FILES:
+        (model / name).write_bytes(b"fake " + name.encode())
+    return root
+
+
+def test_opus_mt_translates_with_ctranslate2_and_substitutes_the_glossary(tmp_path, monkeypatch):
+    fake = _FakeCT2()
+    fake.install(monkeypatch)
+    root = _opus_root(tmp_path)
+    monkeypatch.setenv(translation.OPUS_MT_DIR_ENV, str(root))
+    req = _argos_request(tmp_path, engine="opus-mt")
+    req["subtitle"]["cues"][0]["text"] = "字幕 を\n翻訳 します"
+    resp = execute(req)
+    assert resp["engine"] == "opus-mt"
+    assert resp["engine_version"].startswith("ctranslate2 ")
+    assert "model opus-mt-ja-en sha256:" in resp["engine_version"]
+    assert fake.loaded == [(str(root / "opus-mt-ja-en"), "cpu")]
+    (batch, kwargs), = fake.batches
+    # one segment per cue, glossary target substituted, eos appended
+    # (a ja line break joins without a space, as for every engine)
+    assert batch == [["\u2581captions", "\u2581を翻訳", "\u2581します", "</s>"]]
+    assert kwargs["beam_size"] == 4
+    assert resp["subtitle"]["cues"][0]["text"] == "CAPTIONS を翻訳 します"
+    assert resp["subtitle"]["cues"][0]["start"] == 0 and resp["subtitle"]["cues"][0]["end"] == 3
+
+
+def test_opus_mt_model_change_changes_the_reuse_identity(tmp_path, monkeypatch):
+    _FakeCT2().install(monkeypatch)
+    root = _opus_root(tmp_path)
+    monkeypatch.setenv(translation.OPUS_MT_DIR_ENV, str(root))
+    first = translation.OpusMTEngine().request_version("ja", "en")
+    (root / "opus-mt-ja-en" / "model.bin").write_bytes(b"other weights")
+    assert translation.OpusMTEngine().request_version("ja", "en") != first
+
+
+def test_opus_mt_without_the_modules_is_a_dependency_error(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "ctranslate2", None)
+    monkeypatch.setenv(translation.OPUS_MT_DIR_ENV, str(_opus_root(tmp_path)))
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_argos_request(tmp_path, engine="opus-mt"))
+    assert exc.value.code == "DEPENDENCY_ERROR" and "ctranslate2" in exc.value.message
+
+
+def test_opus_mt_without_a_model_dir_or_pair_is_a_dependency_error(tmp_path, monkeypatch):
+    _FakeCT2().install(monkeypatch)
+    monkeypatch.delenv(translation.OPUS_MT_DIR_ENV, raising=False)
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_argos_request(tmp_path, engine="opus-mt"))
+    assert exc.value.code == "DEPENDENCY_ERROR" and translation.OPUS_MT_DIR_ENV in exc.value.message
+
+    monkeypatch.setenv(translation.OPUS_MT_DIR_ENV, str(_opus_root(tmp_path, pair="en-ja")))
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_argos_request(tmp_path, engine="opus-mt"))
+    assert exc.value.code == "DEPENDENCY_ERROR" and "opus-mt-ja-en" in exc.value.message
+    assert "never downloads" in exc.value.message
+
+
+# --------------------------------------------------------------------------
+# Ollama (fake HTTP; CI never runs a model)
+# --------------------------------------------------------------------------
+
+
+class _FakeOllama:
+    def __init__(self, models=("qwen3:8b",), reply="<think>\n</think>\n\nCaptions get translated."):
+        self.requests = []
+        self.models = models
+        self.reply = reply
+
+    def __call__(self, method, url, headers, body):
+        payload = json.loads(body.decode("utf-8")) if body else None
+        self.requests.append((method, url, payload))
+        if url.endswith("/api/version"):
+            return 200, b'{"version": "0.12.0"}'
+        if url.endswith("/api/tags"):
+            models = [{"name": m, "model": m, "digest": "abcdef0123456789" * 4} for m in self.models]
+            return 200, json.dumps({"models": models}).encode()
+        if url.endswith("/api/chat"):
+            if payload["model"] not in self.models:
+                return 404, b'{"error": "model not found"}'
+            return 200, json.dumps({"message": {"role": "assistant", "content": self.reply}, "done": True}).encode()
+        if url.endswith("/api/pull"):
+            raise AssertionError("subtitle-skill must never pull Ollama models")
+        return 404, b""
+
+
+def test_ollama_one_request_per_cue_through_execute(tmp_path, monkeypatch):
+    fake = _FakeOllama()
+    monkeypatch.setattr(translation, "_ollama_http", fake)
+    monkeypatch.delenv(translation.OLLAMA_URL_ENV, raising=False)
+    monkeypatch.delenv(translation.OLLAMA_MODEL_ENV, raising=False)
+    req = _argos_request(tmp_path, engine="ollama")
+    req["subtitle"]["cues"].append({"id": "2", "start": 3, "end": 5, "text": "二つ目です。"})
+    resp = execute(req)
+    assert resp["engine"] == "ollama"
+    assert resp["engine_version"] == "ollama 0.12.0; model qwen3:8b@abcdef012345"
+    chats = [p for m, u, p in fake.requests if u.endswith("/api/chat")]
+    assert len(chats) == 2
+    assert all(u.startswith(translation.OLLAMA_DEFAULT_URL) for _m, u, _p in fake.requests)
+    first = chats[0]
+    assert first["messages"][1]["content"] == "captionsを翻訳します。"  # glossary substituted, lines joined
+    assert "Japanese to English" in first["messages"][0]["content"]
+    assert first["stream"] is False and first["think"] is False
+    assert first["options"] == {"temperature": 0, "seed": 0}
+    # a thinking block is never part of the subtitle
+    assert resp["subtitle"]["cues"][0]["text"] == "Captions get translated."
+
+
+def test_ollama_missing_model_is_a_dependency_error_and_never_pulls(tmp_path, monkeypatch):
+    fake = _FakeOllama(models=("llama3:8b",))
+    monkeypatch.setattr(translation, "_ollama_http", fake)
+    monkeypatch.delenv(translation.OLLAMA_MODEL_ENV, raising=False)
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_argos_request(tmp_path, engine="ollama"))
+    assert exc.value.code == "DEPENDENCY_ERROR" and "ollama pull qwen3:8b" in exc.value.message
+    assert not any(u.endswith("/api/pull") for _m, u, _p in fake.requests)
+
+
+def test_ollama_refuses_plain_http_to_a_remote_host():
+    engine = translation.OllamaEngine(http=_FakeOllama(), environ={translation.OLLAMA_URL_ENV: "http://10.0.0.5:11434"})
+    with pytest.raises(SubtitleSkillError) as exc:
+        engine.translate(["x"], "ja", "en", ())
+    assert exc.value.code == "DEPENDENCY_ERROR"
+    assert engine.available()[0] is False
+    remote = translation.OllamaEngine(http=_FakeOllama(), environ={translation.OLLAMA_URL_ENV: "https://gpu.example:443"})
+    assert remote.available() == (True, None) and remote.is_local() is False
+    assert translation.OllamaEngine(environ={}).is_local() is True
+
+
+def test_ollama_model_from_the_environment_and_reply_errors():
+    fake = _FakeOllama(models=("qwen3:4b",), reply="Hello.")
+    engine = translation.OllamaEngine(http=fake, environ={translation.OLLAMA_MODEL_ENV: "qwen3:4b"})
+    assert engine.translate(["こんにちは。"], "ja", "en", ()) == ["Hello."]
+    assert fake.requests[-1][2]["model"] == "qwen3:4b"
+
+    def broken(method, url, headers, body):
+        return 200, b'{"message": {}}'
+
+    with pytest.raises(SubtitleSkillError) as exc:
+        translation.OllamaEngine(http=broken, environ={}).translate(["x"], "ja", "en", ())
+    assert exc.value.code == "TOOL_ERROR"

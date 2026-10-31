@@ -103,10 +103,14 @@ def build_contract() -> dict:
                     "(locale profiles for ja/zh/ko, word wrap otherwise), then validated with the target "
                     "language's line-length and reading-speed limits (observations, never rewrites). "
                     "engine: 'argos' (default, offline Argos Translate; the language package must already be "
-                    "installed, nothing is downloaded), 'deepl' (DeepL API, key only from the DEEPL_AUTH_KEY "
-                    "environment variable) or 'memory' (exact source->target pairs in translation_memory; "
-                    "deterministic, no model). glossary terms are sent as a DeepL glossary or substituted "
-                    "into the source for Argos, and checked in every output (GLOSSARY_TERM_MISSING). The "
+                    "installed, nothing is downloaded; its weight licence is unverified), 'opus-mt' (offline "
+                    "Helsinki-NLP OPUS-MT converted to CTranslate2, Apache-2.0 weights, model directory from "
+                    "SUBTITLE_SKILL_OPUS_MT_DIR, nothing is downloaded), 'ollama' (a local LLM such as Qwen3 "
+                    "through Ollama's HTTP API, one request per cue, nothing is pulled), 'deepl' (DeepL API, "
+                    "key only from the DEEPL_AUTH_KEY environment variable) or 'memory' (exact source->target "
+                    "pairs in translation_memory; deterministic, no model). glossary terms are sent as a DeepL "
+                    "glossary or substituted into the source for the other model engines, and checked in "
+                    "every output (GLOSSARY_TERM_MISSING). The "
                     "response carries the translated document as `subtitle`, ready for mux or render."
                 ),
                 "inputs": [

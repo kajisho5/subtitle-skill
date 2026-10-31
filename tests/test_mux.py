@@ -216,6 +216,6 @@ def test_contract_advertises_mux_and_translate():
     mux = contract["operations"]["mux"]
     assert mux["delegates_to"] == {"skill_id": "ffmpeg-skill", "tool": "caption"}
     assert set(mux["containers"]) >= {".mp4", ".mkv"}
-    assert contract["capabilities"]["translation_engines"] == ["argos", "deepl", "memory"]
+    assert contract["capabilities"]["translation_engines"] == ["argos", "deepl", "memory", "opus-mt", "ollama"]
     assert contract["operations"]["translate"]["default_engine"] == "argos"
     assert contract["parameters"]["mux"] == ["tracks", "default_language", "audio_stream"]

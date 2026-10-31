@@ -523,10 +523,7 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
     source = source.sorted_by_start()
 
     engine = translation.make_engine(engine_name, memory=memory)
-    if engine_name == "argos":
-        engine_version = engine.pair_version(source.language, target)
-    else:
-        engine_version = engine.version()
+    engine_version = engine.request_version(source.language, target)
 
     target_profile = profile_for(target)
     max_chars = constraints.max_chars_per_line or (

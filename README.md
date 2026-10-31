@@ -47,7 +47,8 @@ If a typed `SubtitleDocument` and (for burn-in) an ffmpeg-skill install
 are on hand, it works: no network access, no API keys, nothing decided
 that wasn't handed to it. Machine translation (`translate`) follows the
 same rule by default: the offline Argos Translate engine or a
-caller-supplied translation memory; the DeepL API is an opt-in engine
+caller-supplied translation memory; offline OPUS-MT (CTranslate2) and a
+local Ollama LLM are opt-in engines, and the DeepL API is an opt-in engine
 that needs a key in the environment
 ([ADR-004](docs/adr/ADR-004-translation-engine.md)).
 
@@ -224,7 +225,7 @@ each does and `subtitle.language`'s forwarding as the mux language tag.
   "target_language": "en",
   "format": "srt",
   "output_path": "ep01.en.srt",
-  "engine": "argos | deepl | memory",
+  "engine": "argos | opus-mt | ollama | deepl | memory",
   "glossary": [{"source": "字幕", "target": "subtitles"}],
   "translation_memory": [{"source": "今日は字幕の翻訳を試します。", "target": "Today we will try translating subtitles."}],
   "constraints": {"max_chars_per_line": 42}
@@ -234,14 +235,16 @@ each does and `subtitle.language`'s forwarding as the mux language tag.
 | `engine` | Needs | Network | Glossary |
 |---|---|---|---|
 | `argos` (default) | `pip install argostranslate` and an **already installed** language package (`argospm install translate-ja_en`). subtitle-skill never downloads a model, and refuses Argos when it is set to a remote provider | never | each source term is replaced by its target term before translating |
+| `opus-mt` | `pip install ctranslate2 sentencepiece`, and an OPUS-MT model **you converted yourself** (`ct2-transformers-converter --model Helsinki-NLP/opus-mt-ja-en --output_dir <dir>/opus-mt-ja-en --copy_files source.spm target.spm`) with `SUBTITLE_SKILL_OPUS_MT_DIR=<dir>`. Weights Apache-2.0. ja→en only in practice (no general en→ja OPUS-MT model) | never | each source term is replaced by its target term before translating |
+| `ollama` | A running [Ollama](https://github.com/ollama/ollama) with the model **already pulled** (`ollama pull qwen3:8b`; `SUBTITLE_SKILL_OLLAMA_MODEL` picks another, `SUBTITLE_SKILL_OLLAMA_URL` another server — plain `http://` only to localhost). One request per cue, temperature 0. subtitle-skill never pulls a model | local only, unless you point it at an `https://` server | each source term is replaced by its target term before translating |
 | `deepl` | `DEEPL_AUTH_KEY` in the environment (never in the request: `api_key` is a forbidden field). A key ending in `:fx` uses `api-free.deepl.com`; `SUBTITLE_SKILL_DEEPL_API_URL` overrides the URL | yes | a native DeepL glossary, created for the call and deleted after |
 | `memory` | `translation_memory`: exact source → target pairs (whitespace-insensitive) from a human, an earlier job or an agent's own translation | never | the stored targets are used as given |
 
 - **Timecodes are kept.** `id`, `start`, `end`, `speaker` and `style` are copied; each cue's lines are joined and translated as one segment, so timing is never stretched, merged or split.
 - **Constraints apply again in the target language.** The translation is re-broken with the target's locale profile (ja/zh/ko: full-width counting and kinsoku) or wrapped at spaces, preferring a natural break (after punctuation; in Japanese after a particle) and then the shortest longer line. The translated document is then validated with the target's line length and reading speed; what still does not fit is an observation, never a rewrite.
 - **Glossary terms are checked** in every engine's output: a missing target term is a `GLOSSARY_TERM_MISSING` observation.
-- The response's `subtitle` is the translated document (each cue's `metadata.translation.source_text` keeps the original); `engine` / `engine_version` (Argos and model package version, `deepl-api v2`, or the memory's hash) are recorded in the sidecar and in `subtitle.metadata.translation`, and are part of the reuse identity, so a repeated request is never translated (or billed) twice.
-- `doctor --json` lists which engines can run here under `translation_engines`. The quality of Argos on Japanese is not measured here, and the licence of the Argos model packages is not stated in its index: check the credits in the package before shipping ([ADR-004](docs/adr/ADR-004-translation-engine.md)).
+- The response's `subtitle` is the translated document (each cue's `metadata.translation.source_text` keeps the original); `engine` / `engine_version` (Argos and model package version, CTranslate2 version and the OPUS-MT model's sha256, the Ollama version and model digest, `deepl-api v2`, or the memory's hash) are recorded in the sidecar and in `subtitle.metadata.translation`, and are part of the reuse identity, so a repeated request is never translated (or billed) twice.
+- `doctor --json` lists which engines can run here under `translation_engines`, with each engine's `weights_licence`. **Commercial work: the licence of the Argos ja→en weights is not stated anywhere** — not in the index, the package's `metadata.json` or its README (checked 2026-10-31) — so use `engine: "opus-mt"` (Apache-2.0 weights) for ja→en, or `ollama` with an Apache-2.0 model such as Qwen3. `argos` stays the default so an omitted `engine` keeps its meaning. No engine's Japanese quality is measured here ([ADR-004](docs/adr/ADR-004-translation-engine.md), addendum).
 
 ### `mux`
 
@@ -636,7 +639,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope
