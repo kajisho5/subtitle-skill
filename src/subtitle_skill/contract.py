@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from .doctor import RENDER_SUPPORTED_FORMATS
-from .engine import ALLOWED_RENDER_MODES
+from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
 
@@ -27,6 +27,27 @@ PROVIDES = {
 # video-production-agent registers this Skill under (`subtitle/generate`, `subtitle/render`).
 # SKILL_ID stays "subtitle-skill"; only the tool ids use this prefix.
 TOOL_ID_PREFIX = "subtitle"
+
+
+
+def dependencies() -> list:
+    """The AI Video Production OS registry's `dependencies` (kajisho5/AI-video-production-OS
+    registry/capability_contract.schema.json): ffmpeg-skill, as a range of its contract_version,
+    in the same shape audio-production-skill, color-grading-skill and motion-graphics-skill
+    publish. A lower bound only, derived from engine.FFMPEG_SKILL_CONTRACT_VERSION so the
+    contract and the code that delegates can never say different things
+    (docs/adr/ADR-003-single-source-version.md). Not required: `generate` never touches it.
+    """
+    return [
+        {
+            "skill_id": "ffmpeg-skill",
+            "version_range": f">={FFMPEG_SKILL_CONTRACT_VERSION}",
+            "range_of": "contract_version",
+            "required": False,
+            "for": [f"{TOOL_ID_PREFIX}/render"],
+            "tools": [f"ffmpeg-skill/{tool}" for tool in FFMPEG_SKILL_TOOLS],
+        }
+    ]
 
 
 def build_contract() -> dict:
@@ -75,6 +96,7 @@ def build_contract() -> dict:
             {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{TOOL_ID_PREFIX}/{op}"}
             for op in OPERATIONS
         ],
+        "dependencies": dependencies(),
         "capabilities": {
             "formats": list(SUPPORTED_FORMATS),
             "render_formats": list(RENDER_SUPPORTED_FORMATS),

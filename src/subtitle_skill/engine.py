@@ -99,6 +99,17 @@ from .provenance import sha256_file
 #: payload -- environment configuration only.
 FFMPEG_SKILL_DIR_ENV = "SUBTITLE_SKILL_FFMPEG_SKILL_DIR"
 
+#: The ffmpeg-skill contract_version this module was written and verified
+#: against (the module docstring above). The single source of the contract's
+#: `dependencies[].version_range` (contract.py): a lower bound only, never a
+#: ceiling or an exact pin, because what a located checkout can actually do is
+#: checked on that checkout (`is_installed`, doctor's capability check), not
+#: inferred from a version number. Not compared at run time.
+FFMPEG_SKILL_CONTRACT_VERSION = "1.0"
+
+#: The ffmpeg-skill tools `render` invokes (`scripts/<tool>.py`).
+FFMPEG_SKILL_TOOLS = ("caption", "probe")
+
 #: Duration tolerance (seconds) between the source video and the captioned
 #: output. caption.py re-encodes but does not cut or speed-change, so any
 #: difference beyond typical encoder rounding indicates something is wrong.

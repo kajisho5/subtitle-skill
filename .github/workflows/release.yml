@@ -99,10 +99,11 @@ jobs:
 
       - name: Bump pyproject.toml version
         if: steps.current.outputs.auto_bump == 'true' && steps.guard.outputs.already_tagged == 'false'
-        run: |
-          set -euo pipefail
-          sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/s//version = \"${{ steps.target.outputs.target_version }}\"/" pyproject.toml
-          grep -m1 '^version = ' pyproject.toml
+        # pyproject.toml is the only file that carries the version (docs/adr/ADR-003-single-source-version.md);
+        # the script also checks that __version__, contract --json and doctor --json now report it.
+        env:
+          NEW_VERSION: ${{ steps.target.outputs.target_version }}
+        run: python3 scripts/bump_version.py
 
       - name: Generate changelog entry
         if: steps.guard.outputs.already_tagged == 'false'
