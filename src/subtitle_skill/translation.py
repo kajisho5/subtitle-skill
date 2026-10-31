@@ -2,17 +2,20 @@
 
 Engine choice, licences and sources: docs/adr/ADR-004-translation-engine.md.
 
-Three engines sit behind one interface (`TranslationEngine.translate`): the
+Five engines sit behind one interface (`TranslationEngine.translate`): the
 offline default `argos` (Argos Translate, an optional import, never asked to
-download anything), the optional external `deepl` (key only from the
-environment), and the built-in `memory` (exact source -> target pairs the
-caller supplies; deterministic, no model, no network). Whatever the engine,
-the same mechanical steps run around it:
+download anything), the optional offline `opus-mt` (Helsinki-NLP OPUS-MT
+models converted to CTranslate2; Apache-2.0 weights), the optional local LLM
+`ollama` (e.g. Qwen3, through a local Ollama server's HTTP API), the optional
+external `deepl` (key only from the environment), and the built-in `memory`
+(exact source -> target pairs the caller supplies; deterministic, no model, no
+network). Whatever the engine, the same mechanical steps run around it:
 
 1. each cue's lines are joined into one segment, so the engine sees the
    sentence rather than half of it;
 2. glossary terms are passed as a native glossary (DeepL) or substituted into
-   the source (Argos); `memory` is looked up by the original text;
+   the source (Argos, OPUS-MT, Ollama); `memory` is looked up by the original
+   text;
 3. the translated text is re-broken for the *target* language (locale
    profiles' full-width counting and kinsoku, or word wrap at spaces);
 4. ids, start/end times, speaker and style are copied unchanged -- timing is
@@ -28,10 +31,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple
 
 from .errors import SubtitleSkillError
@@ -49,9 +54,33 @@ from .locales import (
 from .models import SubtitleCue, SubtitleDocument
 from .provenance import canonical_json
 
-#: Request `engine` values. `argos` is the default (ADR-004 decision 2).
-ENGINES = ("argos", "deepl", "memory")
+#: Request `engine` values. `argos` is the default (ADR-004 decision 2);
+#: `opus-mt` and `ollama` were added after the Argos weight licence turned out
+#: not to be stated anywhere (ADR-004 "Addendum").
+ENGINES = ("argos", "deepl", "memory", "opus-mt", "ollama")
 DEFAULT_ENGINE = "argos"
+
+#: What `doctor` reports about each engine's weights (ADR-004 addendum). A
+#: string, never a guess: "unverified" means no licence was found stated.
+WEIGHTS_LICENCES = {
+    "argos": "unverified: no licence is stated in the package index, the package's metadata.json or its README (ADR-004)",
+    "deepl": "not applicable: DeepL API service terms",
+    "memory": "not applicable: no model",
+    "opus-mt": "Apache-2.0 (Helsinki-NLP/opus-mt-* Hugging Face model cards); the original OPUS-MT release is CC-BY-4.0",
+    "ollama": "the pulled model's own licence (Qwen3: Apache-2.0); check `ollama show <model> --license`",
+}
+
+#: Root directory of OPUS-MT models converted to CTranslate2, one
+#: sub-directory per pair: `<root>/opus-mt-ja-en/{model.bin,source.spm,target.spm}`.
+OPUS_MT_DIR_ENV = "SUBTITLE_SKILL_OPUS_MT_DIR"
+OPUS_MT_FILES = ("model.bin", "source.spm", "target.spm")
+
+#: Local Ollama server and model. Read only from the environment.
+OLLAMA_URL_ENV = "SUBTITLE_SKILL_OLLAMA_URL"
+OLLAMA_MODEL_ENV = "SUBTITLE_SKILL_OLLAMA_MODEL"
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434"
+OLLAMA_DEFAULT_MODEL = "qwen3:8b"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 #: Read only from the environment -- a request may never carry a key
 #: (`security.FORBIDDEN_KEYS` refuses `api_key` anywhere in a request).
@@ -148,6 +177,11 @@ class TranslationEngine:
 
     def native_glossary(self) -> bool:
         return False
+
+    def request_version(self, source: str, target: str) -> str:
+        """The version recorded for one request (provenance and reuse
+        identity). Engines whose model depends on the pair override it."""
+        return self.version()
 
     def translate(
         self, texts: Sequence[str], source: str, target: str, glossary: Sequence[GlossaryEntry]
@@ -267,6 +301,9 @@ class ArgosEngine(TranslationEngine):
         pkg = self._package(package_module, source, target)
         return f"{self.version()}; package {_argos_code(source)}_{_argos_code(target)} {getattr(pkg, 'package_version', '?')}"
 
+    def request_version(self, source: str, target: str) -> str:
+        return self.pair_version(source, target)
+
     def available(self) -> Tuple[bool, Optional[str]]:
         try:
             self._modules()
@@ -296,15 +333,26 @@ class ArgosEngine(TranslationEngine):
 HttpFunc = Callable[[str, str, Mapping[str, str], Optional[bytes]], Tuple[int, bytes]]
 
 
-def _urllib_http(method: str, url: str, headers: Mapping[str, str], body: Optional[bytes]) -> Tuple[int, bytes]:
+def _http_request(
+    method: str, url: str, headers: Mapping[str, str], body: Optional[bytes], *, service: str, timeout: float
+) -> Tuple[int, bytes]:
     req = urllib.request.Request(url, data=body, method=method, headers=dict(headers))
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 - fixed https base URL
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - URL checked by the engine
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
     except (urllib.error.URLError, OSError) as exc:
-        raise SubtitleSkillError("DEPENDENCY_ERROR", f"DeepL API unreachable: {exc}") from exc
+        raise SubtitleSkillError("DEPENDENCY_ERROR", f"{service} unreachable: {exc}") from exc
+
+
+def _urllib_http(method: str, url: str, headers: Mapping[str, str], body: Optional[bytes]) -> Tuple[int, bytes]:
+    return _http_request(method, url, headers, body, service="DeepL API", timeout=60)
+
+
+def _ollama_http(method: str, url: str, headers: Mapping[str, str], body: Optional[bytes]) -> Tuple[int, bytes]:
+    # a local LLM on a CPU can take minutes for one cue
+    return _http_request(method, url, headers, body, service="Ollama", timeout=600)
 
 
 def deepl_target_code(language: str) -> str:
@@ -433,6 +481,259 @@ class DeepLEngine(TranslationEngine):
                     pass  # a leftover glossary is harmless; the translation already succeeded or failed
 
 
+class OpusMTEngine(TranslationEngine):
+    """Helsinki-NLP OPUS-MT, converted to CTranslate2, offline only
+    (ADR-004 addendum).
+
+    The user converts the model once, themselves (e.g. `ct2-transformers-converter
+    --model Helsinki-NLP/opus-mt-ja-en --output_dir <root>/opus-mt-ja-en
+    --copy_files source.spm target.spm`) and points `SUBTITLE_SKILL_OPUS_MT_DIR`
+    at `<root>`. subtitle-skill never downloads or converts a model; it only
+    imports `ctranslate2` and `sentencepiece` (both optional) and reads the
+    pair's directory.
+    """
+
+    name = "opus-mt"
+
+    def __init__(self, environ: Optional[Mapping[str, str]] = None):
+        self.environ = os.environ if environ is None else environ
+        self._model_hash: dict = {}
+
+    def _modules(self):
+        try:
+            import ctranslate2  # type: ignore
+            import sentencepiece  # type: ignore
+        except ImportError as exc:
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                "engine 'opus-mt' needs `pip install ctranslate2 sentencepiece` and an OPUS-MT model converted to "
+                f"CTranslate2 under {OPUS_MT_DIR_ENV}; subtitle-skill never downloads one (docs/adr/ADR-004)",
+            ) from exc
+        return ctranslate2, sentencepiece
+
+    def _root(self) -> Path:
+        root = self.environ.get(OPUS_MT_DIR_ENV, "").strip()
+        if not root:
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                f"engine 'opus-mt' needs {OPUS_MT_DIR_ENV} set to a directory holding converted models "
+                "(e.g. <dir>/opus-mt-ja-en); subtitle-skill never downloads models",
+            )
+        return Path(root)
+
+    def model_dir(self, source: str, target: str) -> Path:
+        src, tgt = _argos_code(source), _argos_code(target)
+        path = self._root() / f"opus-mt-{src}-{tgt}"
+        missing = [name for name in OPUS_MT_FILES if not (path / name).is_file()]
+        if missing:
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                f"no converted OPUS-MT model for {src}->{tgt} at {path} (missing {missing}); convert "
+                f"Helsinki-NLP/opus-mt-{src}-{tgt} with ct2-transformers-converter yourself -- "
+                "subtitle-skill never downloads models",
+            )
+        return path
+
+    def version(self) -> str:
+        try:
+            from importlib.metadata import version
+
+            return "ctranslate2 " + version("ctranslate2")
+        except Exception:  # noqa: BLE001 - metadata is informational only
+            return "ctranslate2 unknown"
+
+    def request_version(self, source: str, target: str) -> str:
+        self._modules()
+        path = self.model_dir(source, target)
+        key = str(path)
+        if key not in self._model_hash:
+            digest = hashlib.sha256()
+            for name in OPUS_MT_FILES:
+                with open(path / name, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        digest.update(chunk)
+            self._model_hash[key] = digest.hexdigest()[:16]
+        return f"{self.version()}; model {path.name} sha256:{self._model_hash[key]}"
+
+    def available(self) -> Tuple[bool, Optional[str]]:
+        try:
+            self._modules()
+            root = self._root()
+        except SubtitleSkillError as exc:
+            return False, exc.message
+        if not root.is_dir():
+            return False, f"{OPUS_MT_DIR_ENV} is not a directory: {root}"
+        return True, None
+
+    def translate(self, texts, source, target, glossary):
+        ctranslate2, sentencepiece = self._modules()
+        path = self.model_dir(source, target)
+        translator = ctranslate2.Translator(str(path), device="cpu")
+        sp_source = sentencepiece.SentencePieceProcessor(model_file=str(path / "source.spm"))
+        sp_target = sentencepiece.SentencePieceProcessor(model_file=str(path / "target.spm"))
+        # Marian models expect the end-of-sentence token the Hugging Face
+        # tokenizer appends; CTranslate2 strips it from the output.
+        batch = [list(sp_source.encode(text, out_type=str)) + ["</s>"] for text in texts]
+        results = translator.translate_batch(batch, beam_size=4)
+        if len(results) != len(texts):
+            raise SubtitleSkillError(
+                "TOOL_ERROR", f"CTranslate2 returned {len(results)} results for {len(texts)} texts"
+            )
+        out = []
+        for result in results:
+            hypotheses = getattr(result, "hypotheses", None)
+            if not hypotheses:
+                raise SubtitleSkillError("TOOL_ERROR", "CTranslate2 returned a result without a hypothesis")
+            tokens = [t for t in hypotheses[0] if t != "</s>"]
+            text = sp_target.decode(tokens)
+            if not isinstance(text, str):
+                raise SubtitleSkillError("TOOL_ERROR", "SentencePiece returned a non-string translation")
+            out.append(text)
+        return out
+
+
+#: Names the Ollama prompt uses; any other language is named by its tag.
+_LANGUAGE_NAMES = {
+    "ja": "Japanese",
+    "en": "English",
+    "zh": "Chinese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+}
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _language_name(tag: str) -> str:
+    return _LANGUAGE_NAMES.get(_argos_code(tag), tag)
+
+
+class OllamaEngine(TranslationEngine):
+    """A local LLM (Qwen3 by default) through Ollama's HTTP API (ADR-004
+    addendum). Optional; never pulls a model (`/api/pull` is never called).
+
+    One `/api/chat` request per cue, so the cue count can never drift; the
+    temperature is 0 with a fixed seed. Glossary terms are substituted into
+    the source like Argos, and checked afterwards like every engine. Plain
+    `http://` is accepted only for a loopback host, so subtitle text never
+    leaves the machine unencrypted.
+    """
+
+    name = "ollama"
+
+    def __init__(self, http: Optional[HttpFunc] = None, environ: Optional[Mapping[str, str]] = None):
+        self.http = http or _ollama_http
+        self.environ = os.environ if environ is None else environ
+
+    def base_url(self) -> str:
+        url = (self.environ.get(OLLAMA_URL_ENV, "") or OLLAMA_DEFAULT_URL).strip().rstrip("/")
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in ("http", "https") or not host:
+            raise SubtitleSkillError("DEPENDENCY_ERROR", f"{OLLAMA_URL_ENV} must be an http(s):// URL, got {url!r}")
+        if parsed.scheme == "http" and host not in _LOOPBACK_HOSTS:
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                f"{OLLAMA_URL_ENV} may use plain http:// only for a loopback host (localhost/127.0.0.1/::1); "
+                "use https:// for a remote Ollama",
+            )
+        return url
+
+    def is_local(self) -> bool:
+        try:
+            host = (urllib.parse.urlparse(self.base_url()).hostname or "").lower()
+        except SubtitleSkillError:
+            return True
+        return host in _LOOPBACK_HOSTS
+
+    def model(self) -> str:
+        return (self.environ.get(OLLAMA_MODEL_ENV, "") or OLLAMA_DEFAULT_MODEL).strip()
+
+    def _call(self, method: str, path: str, payload: Optional[dict]) -> dict:
+        headers = {"User-Agent": "subtitle-skill"}
+        body = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        status, raw = self.http(method, self.base_url() + path, headers, body)
+        if status == 404 and path == "/api/chat":
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                f"Ollama has no model {self.model()!r}; pull it yourself (`ollama pull {self.model()}`)",
+            )
+        if status >= 400:
+            text = raw.decode("utf-8", "replace")[:500]
+            raise SubtitleSkillError("TOOL_ERROR", f"Ollama {method} {path} failed (HTTP {status}): {text}")
+        try:
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SubtitleSkillError("TOOL_ERROR", f"Ollama returned a non-JSON response for {path}") from exc
+        if not isinstance(data, dict):
+            raise SubtitleSkillError("TOOL_ERROR", f"Ollama returned an unexpected document for {path}")
+        return data
+
+    def version(self) -> str:
+        return f"ollama; model {self.model()}"
+
+    def request_version(self, source: str, target: str) -> str:
+        server = self._call("GET", "/api/version", None).get("version", "unknown")
+        model = self.model()
+        tags = self._call("GET", "/api/tags", None).get("models")
+        digest = None
+        for item in tags if isinstance(tags, list) else []:
+            if isinstance(item, Mapping) and model in (item.get("name"), item.get("model")):
+                digest = item.get("digest")
+                break
+        if not isinstance(digest, str) or not digest:
+            raise SubtitleSkillError(
+                "DEPENDENCY_ERROR",
+                f"Ollama has no model {model!r}; pull it yourself (`ollama pull {model}`) -- "
+                "subtitle-skill never pulls models",
+            )
+        return f"ollama {server}; model {model}@{digest[:12]}"
+
+    def available(self) -> Tuple[bool, Optional[str]]:
+        try:
+            self.base_url()
+        except SubtitleSkillError as exc:
+            return False, exc.message
+        return True, None
+
+    def _prompt(self, source: str, target: str) -> str:
+        src, tgt = _language_name(source), _language_name(target)
+        return (
+            f"You translate subtitles from {src} to {tgt}. Translate the user's message, which is one "
+            f"subtitle cue, into natural {tgt}. Reply with the translation only: no quotes, notes, "
+            f"alternatives or explanations. Keep words that are already in {tgt} exactly as they are."
+        )
+
+    def translate(self, texts, source, target, glossary):
+        system = self._prompt(source, target)
+        out = []
+        for text in texts:
+            data = self._call(
+                "POST",
+                "/api/chat",
+                {
+                    "model": self.model(),
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}],
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": 0, "seed": 0},
+                },
+            )
+            message = data.get("message")
+            content = message.get("content") if isinstance(message, Mapping) else None
+            if not isinstance(content, str):
+                raise SubtitleSkillError("TOOL_ERROR", "Ollama returned a reply without message.content")
+            out.append(_THINK_BLOCK.sub("", content).strip())
+        return out
+
+
 def _batches(texts: List[str], limit: int) -> List[List[str]]:
     batches: List[List[str]] = []
     cur: List[str] = []
@@ -456,6 +757,10 @@ def make_engine(name: str, *, memory: Optional[Mapping[str, str]] = None) -> Tra
         return ArgosEngine()
     if name == "deepl":
         return DeepLEngine()
+    if name == "opus-mt":
+        return OpusMTEngine()
+    if name == "ollama":
+        return OllamaEngine()
     raise SubtitleSkillError("INVALID_INPUT", f"engine must be one of {list(ENGINES)}, got {name!r}")
 
 
@@ -465,7 +770,11 @@ def engine_status() -> dict:
     for name in ENGINES:
         engine = make_engine(name)
         ok, why = engine.available()
-        entry = {"available": ok, "offline": name != "deepl"}
+        offline = engine.is_local() if isinstance(engine, OllamaEngine) else name != "deepl"
+        entry = {"available": ok, "offline": offline, "weights_licence": WEIGHTS_LICENCES[name]}
+        if isinstance(engine, OllamaEngine):
+            entry["model"] = engine.model()
+            entry["checked"] = "configuration only: the server and model are probed when a request runs"
         if why:
             entry["detail"] = why
         out[name] = entry

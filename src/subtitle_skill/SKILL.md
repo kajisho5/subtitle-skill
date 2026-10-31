@@ -1,6 +1,6 @@
 ---
 name: subtitle-skill
-description: Deterministic subtitle validation, SRT/WebVTT generation, video caption burn-in, machine translation of subtitle documents (offline Argos Translate, optional DeepL, or a caller translation memory; timecodes kept, line length and reading speed re-checked for the target language), and multi-language soft-subtitle mux. Given an already-decided, typed subtitle document (cue text, timing, optional speaker/style), validate its timeline, generate an SRT or WebVTT file, translate it, or burn/mux it into a video by delegating to ffmpeg-skill's caption tool. Use this skill only after another agent has already decided what the subtitle cues should say and how they should be split -- it performs no transcription, no diarization, no cue-splitting judgement, and no "does this look right" visual check.
+description: Deterministic subtitle validation, SRT/WebVTT generation, video caption burn-in, machine translation of subtitle documents (offline Argos Translate by default, optional OPUS-MT on CTranslate2, a local Ollama LLM, DeepL, or a caller translation memory; timecodes kept, line length and reading speed re-checked for the target language), and multi-language soft-subtitle mux. Given an already-decided, typed subtitle document (cue text, timing, optional speaker/style), validate its timeline, generate an SRT or WebVTT file, translate it, or burn/mux it into a video by delegating to ffmpeg-skill's caption tool. Use this skill only after another agent has already decided what the subtitle cues should say and how they should be split -- it performs no transcription, no diarization, no cue-splitting judgement, and no "does this look right" visual check.
 ---
 
 # subtitle-skill
@@ -176,6 +176,16 @@ can omit `constraints` entirely.
     an already-installed language package; subtitle-skill never
     downloads one. Missing → `DEPENDENCY_ERROR`, not retryable until the
     environment changes.
+    The licence of the Argos ja→en weights is not stated anywhere
+    (ADR-004 addendum): for commercial ja→en work pass `engine: "opus-mt"`.
+  - `engine: "opus-mt"` is offline (Helsinki-NLP OPUS-MT on CTranslate2,
+    Apache-2.0 weights) and needs `ctranslate2` + `sentencepiece` and a
+    model the user converted into `$SUBTITLE_SKILL_OPUS_MT_DIR/opus-mt-<src>-<tgt>`.
+    ja→en in practice; never downloads.
+  - `engine: "ollama"` asks a local Ollama server (Qwen3 `qwen3:8b` by
+    default; `SUBTITLE_SKILL_OLLAMA_MODEL` / `SUBTITLE_SKILL_OLLAMA_URL`),
+    one request per cue at temperature 0; the model must already be
+    pulled. An LLM may paraphrase: check the observations.
   - `engine: "deepl"` needs `DEEPL_AUTH_KEY` in the environment. Never put
     a key in the request (`api_key` is refused anywhere).
   - `engine: "memory"` looks up exact source → target pairs you pass in

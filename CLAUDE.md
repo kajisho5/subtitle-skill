@@ -192,7 +192,7 @@ authoritative source, never re-describe this from memory:
 |---|---|---|
 | `generate` | SRT, WebVTT | nothing external |
 | `render` | SRT only | a reachable ffmpeg-skill install (`caption` + `probe` tools) |
-| `translate` | SRT, WebVTT | engine `memory`: nothing; `argos`: argostranslate + an installed package; `deepl`: `DEEPL_AUTH_KEY` |
+| `translate` | SRT, WebVTT | engine `memory`: nothing; `argos`: argostranslate + an installed package; `opus-mt`: ctranslate2 + sentencepiece + a converted model under `SUBTITLE_SKILL_OPUS_MT_DIR`; `ollama`: a local Ollama server with the model pulled; `deepl`: `DEEPL_AUTH_KEY` |
 | `mux` | SRT only | ffmpeg-skill (`caption` + `probe`); 1.16+ for more than one track |
 
 Capability/error/format lists live in code (`src/subtitle_skill/contract.py`,
@@ -236,6 +236,16 @@ Ordered by value, not urgency:
    today) — not something to do speculatively.
 
 ### Done since the gaps above were first written
+
+- **Argos weight licence checked; `opus-mt` and `ollama` engines** (ECOSYSTEM_ROADMAP
+  step 7, ADR-004 addendum). The ja→en `.argosmodel` was downloaded once,
+  read and deleted: its `metadata.json` and README state no licence, so it
+  stays unverified. Added `opus-mt` (OPUS-MT converted to CTranslate2,
+  Apache-2.0 weights, `SUBTITLE_SKILL_OPUS_MT_DIR`) and `ollama` (local LLM,
+  `qwen3:8b` default, one `/api/chat` per cue, never pulls). `argos` stays
+  the default; `doctor` reports `weights_licence` per engine. **Contract
+  changed** (`operations.translate.engines`, `capabilities.translation_engines`,
+  the translate description): video-production-agent must re-pin.
 
 - **Machine translation and multi-language mux** (ECOSYSTEM_ROADMAP steps
   4-6; `docs/adr/ADR-004-translation-engine.md`,

@@ -15,7 +15,7 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 |---|---|---|
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
-| 字幕翻訳 | done | `translate` operation; engine chosen: Argos Translate offline by default, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
+| 字幕翻訳 | done | `translate` operation; engine chosen: Argos Translate offline by default, OPUS-MT (CTranslate2) and local Ollama LLM optional, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
 | ロケール別字幕整形 | done | ja/zh/ko locale profiles: East Asian Width counting, kinsoku observations, per-locale defaults ([ADR-001](docs/adr/ADR-001-locale-profiles.md)) |
 
 ## Wiring
@@ -36,6 +36,8 @@ Agent wires generate and render (burn); render's mux mode, audio_stream, transla
   - Done when: ja<->en fixture
 - [x] **6. Multi-language mux** — several subtitle documents -> one mux (`mux`: one ffmpeg-skill `caption --mode mux` call, mov_text in .mp4, SubRip in .mkv, language-tagged; `tests/test_mux.py` two-language .mkv/.mp4 and translate→mux tests; [ADR-005](docs/adr/ADR-005-multi-language-mux.md), [#24](https://github.com/kajisho5/subtitle-skill/pull/24))
   - Done when: 2-language integration test
+- [x] **7. English-facing engines: Argos weight licence + commercial-safe ja→en** — the Argos ja→en package's own `metadata.json`/README state no licence (unverified, ADR-004 addendum); optional `opus-mt` (Helsinki-NLP OPUS-MT on CTranslate2, Apache-2.0 weights) and `ollama` (local Qwen3 via Ollama's HTTP API) engines, `argos` stays the default, `doctor` reports each engine's weight licence ([PR_LINK])
+  - Done when: both engines tested with mocks, no model downloaded in CI
 
 ## Boundaries
 
