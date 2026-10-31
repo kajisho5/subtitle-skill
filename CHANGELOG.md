@@ -1,3 +1,7 @@
+## v0.4.1 - 2026-10-31
+
+- ci: check ffmpeg-skill v3.0.0 alongside main in the compatibility workflow (#26) (ded29c8)
+
 ## v0.4.0 - 2026-10-31
 
 - feat(translate): Argos weight licence check; add opus-mt and ollama engines (#25) (58e4882)
