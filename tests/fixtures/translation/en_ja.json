@@ -1,0 +1,60 @@
+{
+  "description": "en->ja acceptance fixture (roadmap step 5). Japanese target: the ja locale profile applies (13 full-width characters per line, half-width counts 0.5, 4 cps, kinsoku). Expected breaks worked out by hand: a two-line break that never starts a line with a small kana, a prolonged sound mark or closing punctuation. Among legal breaks, one after a particle (hiragana followed by kanji/katakana) is preferred, then the shortest longer line.",
+  "source": {
+    "id": "ep02",
+    "language": "en",
+    "cues": [
+      {
+        "id": "a",
+        "start": 1.0,
+        "end": 6.0,
+        "text": "Subtitles are translated\none cue at a time."
+      },
+      {
+        "id": "b",
+        "start": 6.5,
+        "end": 7.5,
+        "text": "Thank you."
+      }
+    ]
+  },
+  "glossary": [
+    {
+      "source": "cue",
+      "target": "キュー"
+    }
+  ],
+  "translation_memory": [
+    {
+      "source": "Subtitles are translated one cue at a time.",
+      "target": "字幕はキューごとに一つずつ翻訳されます。"
+    },
+    {
+      "source": "Thank you.",
+      "target": "ありがとうございます。"
+    }
+  ],
+  "expected": {
+    "language": "ja",
+    "cues": [
+      {
+        "id": "a",
+        "start": 1.0,
+        "end": 6.0,
+        "text": "字幕はキューごとに\n一つずつ翻訳されます。"
+      },
+      {
+        "id": "b",
+        "start": 6.5,
+        "end": 7.5,
+        "text": "ありがとうございます。"
+      }
+    ],
+    "observations": [
+      {
+        "code": "READING_SPEED_TOO_HIGH",
+        "cue_id": "b"
+      }
+    ]
+  }
+}

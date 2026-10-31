@@ -15,12 +15,12 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 |---|---|---|
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
-| 字幕翻訳 | missing | owned here (owner decision 2026-10-30); engine chosen: Argos Translate offline by default, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
+| 字幕翻訳 | done | `translate` operation; engine chosen: Argos Translate offline by default, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
 | ロケール別字幕整形 | done | ja/zh/ko locale profiles: East Asian Width counting, kinsoku observations, per-locale defaults ([ADR-001](docs/adr/ADR-001-locale-profiles.md)) |
 
 ## Wiring
 
-Agent wires generate and render (burn); mux and audio_stream are not wired. Delegates to ffmpeg-skill caption, probe.
+Agent wires generate and render (burn); render's mux mode, audio_stream, translate and mux are not wired (translate/mux change the contract's operations: the agent must re-pin). Delegates to ffmpeg-skill caption, probe.
 
 ## Steps
 
@@ -32,9 +32,9 @@ Agent wires generate and render (burn); mux and audio_stream are not wired. Dele
   - Done when: Japanese fixtures
 - [x] **4. Translation engine ADR** — the owner kept 字幕翻訳 here (2026-10-30); choose an offline-capable MT engine and check the licences of its code and weights ([ADR-004](docs/adr/ADR-004-translation-engine.md), [#23](https://github.com/kajisho5/subtitle-skill/pull/23))
   - Done when: the ADR is merged
-- [ ] **5. Machine translation** — engine chosen in the ADR, offline-capable, provenance records engine
+- [x] **5. Machine translation** — engine chosen in the ADR, offline-capable, provenance records engine (`translate`: Argos offline default / DeepL optional / caller translation memory, timecodes kept, target-language layout and validation, glossary check; fixtures `tests/fixtures/translation/ja_en.json`, `en_ja.json`; [#24](https://github.com/kajisho5/subtitle-skill/pull/24))
   - Done when: ja<->en fixture
-- [ ] **6. Multi-language mux** — several subtitle documents -> one mux
+- [x] **6. Multi-language mux** — several subtitle documents -> one mux (`mux`: one ffmpeg-skill `caption --mode mux` call, mov_text in .mp4, SubRip in .mkv, language-tagged; `tests/test_mux.py` two-language .mkv/.mp4 and translate→mux tests; [ADR-005](docs/adr/ADR-005-multi-language-mux.md), [#24](https://github.com/kajisho5/subtitle-skill/pull/24))
   - Done when: 2-language integration test
 
 ## Boundaries

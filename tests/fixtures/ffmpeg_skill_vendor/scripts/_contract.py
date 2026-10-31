@@ -18,6 +18,7 @@ The contract has its own version (CONTRACT_VERSION) that only changes when the s
 this document changes; the skill version comes from package.json.
 """
 import argparse
+import functools
 import importlib.util
 import json
 import os
@@ -53,10 +54,16 @@ ROLES = {
 #   filter:<name>               `ffmpeg -filters`
 #   bsf:<name>                  `ffmpeg -bsfs`
 #   external:whisper            a local whisper engine (whisper.cpp / faster-whisper / openai-whisper)
+#   external:parakeet           a local Parakeet engine (parakeet-mlx, or parakeet-cli with a .gguf model);
+#                               English. Either external engine satisfies --transcribe.
 # "optional" entries name the flag or condition under which the capability is needed.
 FF = ["ffmpeg", "ffprobe"]
 X264 = "encoder:libx264"
 X265 = "encoder:libx265"
+# --codec (1.8, every tool that re-encodes): the encoder the flag names, on top of the tool's own list
+CODEC_CAPS = [{"capability": X265, "when": "--codec hevc"},
+              {"capability": "encoder:libsvtav1", "when": "--codec av1 (libaom-av1 is the fallback)"},
+              {"capability": "encoder:prores_ks", "when": "--codec prores"}]
 AAC = "encoder:aac"
 HDR_X265 = {"capability": X265, "when": "the source is HDR (kept as HEVC Main10)"}
 AUDIO_OUT = [
@@ -71,13 +78,60 @@ TOOL_META: Dict[str, Dict[str, Any]] = {
                   required=["ffprobe"], optional=[{"capability": "ffmpeg", "when": "--analyze"}, {"capability": "filter:signalstats", "when": "--analyze"}],
                   video_required=False, audio_only=True, visual=False, verify=[], produces_artifact=False, idempotency="bit_exact", deterministic=True),
     "cut": dict(role="execution", inputs=["video or audio asset"], outputs=["cut video/audio artifact (same container family, or audio extracted when -o has an audio extension)"],
-                required=FF, optional=[{"capability": X264, "when": "re-encode: --accurate, VFR source, or a keyframe farther than --tolerance"}, HDR_X265, {"capability": AAC, "when": "re-encode of a video container"}] + AUDIO_OUT,
+                required=FF, optional=[{"capability": X264, "when": "re-encode: --accurate, VFR source, or a keyframe farther than --tolerance"},
+                                       dict(HDR_X265, when=HDR_X265["when"] + "; with --keep-hevc on an HEVC source"), {"capability": AAC, "when": "re-encode of a video container"}] + AUDIO_OUT,
                 video_required=False, audio_only=True, visual=False, verify=["probe"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "fit": dict(role="execution", inputs=["video asset"], outputs=["video artifact at the requested duration / aspect / fps"],
-                required=FF + [X264, AAC], optional=[HDR_X265, {"capability": "filter:minterpolate", "when": "--smooth interpolate"}],
+                required=FF + [X264, AAC], optional=[HDR_X265, {"capability": "filter:minterpolate", "when": "--smooth interpolate"},
+                                                     {"capability": "filter:boxblur", "when": "--pad-fill blur or --fit blur"},
+                                                     {"capability": "filter:eq", "when": "--fit blur (the background copy is dimmed)"}],
                 video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "crop": dict(role="execution", inputs=["video asset"], outputs=["video artifact cropped to the given pixel rectangle"],
                  required=FF + [X264, AAC], optional=[HDR_X265],
+                 video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "deinterlace": dict(role="execution", inputs=["video asset"], outputs=["deinterlaced (progressive) video artifact"],
+                        required=FF + [X264, AAC, "filter:yadif"], optional=[HDR_X265],
+                        video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "denoise": dict(role="execution", inputs=["video asset"], outputs=["denoised video artifact"],
+                    required=FF + [X264, AAC, "filter:hqdn3d"], optional=[HDR_X265],
+                    video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "cropdetect": dict(role="analysis", inputs=["video asset"], outputs=["detected crop rectangle JSON on stdout (no file)"],
+                       required=FF + ["filter:cropdetect"], optional=[],
+                       video_required=True, audio_only=False, visual=False, verify=[], produces_artifact=False, idempotency="environment_dependent", deterministic=False),
+    "redact": dict(role="execution", inputs=["video asset"], outputs=["video artifact with the given pixel rectangle blurred, pixelated, or interpolated away (--mode delogo)"],
+                   required=FF + [X264, AAC, "filter:boxblur"],
+                   optional=[HDR_X265, {"capability": "filter:delogo", "when": "--mode delogo"}],
+                   video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "waveform": dict(role="execution", inputs=["audio or video asset (audio track only)"], outputs=["generated waveform or spectrum visualization video artifact"],
+                     required=FF + [X264, AAC, "filter:showwaves"], optional=[{"capability": "filter:showspectrum", "when": "--style spectrum"}],
+                     video_required=False, audio_only=True, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "sphere": dict(role="execution", inputs=["360/spherical video asset"], outputs=["flat rectilinear video artifact of the chosen viewport"],
+                    required=FF + [X264, AAC, "filter:v360"], optional=[HDR_X265],
+                    video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "grid": dict(role="execution", inputs=["cols*rows video assets, filled left-to-right top-to-bottom"], outputs=["composited grid video artifact"],
+                 required=FF + [X264, "filter:xstack"], optional=[{"capability": "filter:drawtext", "when": "--label auto (the default)"}, {"capability": AAC, "when": "--audio-from"}],
+                 video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "straighten": dict(role="execution", inputs=["video asset"], outputs=["video artifact rotated by the given angle (horizon correction)"],
+                       required=FF + [X264, AAC, "filter:rotate"], optional=[HDR_X265],
+                       video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "freeze": dict(role="execution", inputs=["video asset"], outputs=["video artifact with a frame held for the given duration"],
+                   required=FF + [X264, AAC, "filter:tpad"], optional=[HDR_X265],
+                   video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "pad": dict(role="execution", inputs=["video asset"], outputs=["video artifact with black/silent padding added at the start/end"],
+                required=FF + [X264, AAC, "filter:tpad"], optional=[HDR_X265],
+                video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "speedramp": dict(role="execution", inputs=["video asset"], outputs=["video artifact with a stepped speed ramp applied across segments"],
+                      required=FF + [X264, AAC], optional=[HDR_X265],
+                      video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "broll": dict(role="execution", inputs=["A-roll video asset", "one or more B-roll video assets (--insert)"], outputs=["video artifact of exactly the A-roll's length with the B-roll shown during each cutaway window"],
+                  required=FF + [X264, AAC, "filter:overlay", "filter:amix"], optional=[HDR_X265],
+                  video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "metadata": dict(role="execution", inputs=["video or audio asset", "chapters text file (--chapters)"], outputs=["the same streams, stream-copied, with chapter markers and/or title/artist/comment tags written", "proposed chapter list and YouTube description block (--auto-chapters --chapters-out/--description-out)"],
+                     required=FF, optional=[{"capability": "filter:silencedetect", "when": "--auto-chapters"},
+                                            {"capability": "filter:scdet", "when": "--auto-chapters --from scenes|both"}],
+                     video_required=False, audio_only=True, visual=False, verify=["probe"], produces_artifact=True, idempotency="bit_exact", deterministic=True),
+    "loop": dict(role="execution", inputs=["video asset"], outputs=["video artifact repeated to the requested count or duration (--boomerang: played forward then backward, silent)"],
+                 required=FF + [X264, AAC], optional=[{"capability": "filter:reverse", "when": "--boomerang"}, {"capability": "filter:loop", "when": "--boomerang"}],
                  video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "insert": dict(role="execution", inputs=["still image"], outputs=["silent video artifact of the requested duration / frame size / fps"],
                    required=FF + [X264], optional=[{"capability": "filter:zoompan", "when": "--zoom / --pan"}],
@@ -94,8 +148,8 @@ TOOL_META: Dict[str, Dict[str, Any]] = {
     "sequence": dict(role="execution", inputs=["a directory of numbered/globbed still images"], outputs=["video artifact built from the frame sequence"],
                       required=FF + [X264], optional=[],
                       video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
-    "caption": dict(role="execution", inputs=["video asset", "SRT/ASS file or timed text (--text)"], outputs=["video artifact with burnt-in captions (--mode burn)", "video artifact with an added soft subtitle stream (--mode mux)", "generated .srt / .ass sidecar"],
-                    required=FF + [X264, AAC, "filter:subtitles"], optional=[{"capability": "filter:ass", "when": "--animate / --karaoke"}, HDR_X265, {"capability": "external:whisper", "when": "--transcribe"},
+    "caption": dict(role="execution", inputs=["video asset", "SRT/ASS file or timed text (--text)"], outputs=["video artifact with burnt-in captions (--mode burn)", "video artifact with one or several language-tagged soft subtitle streams (--mode mux, --srt file:lang repeated)", "generated .srt / .ass sidecar"],
+                    required=FF + [X264, AAC, "filter:subtitles"], optional=[{"capability": "filter:ass", "when": "--animate / --karaoke"}, HDR_X265, {"capability": "external:whisper", "when": "--transcribe"}, {"capability": "external:parakeet", "when": "--transcribe (English; either engine family satisfies it)"},
                                             {"capability": "encoder:mov_text", "when": "--mode mux with a .mp4/.m4v/.mov output"}, {"capability": "encoder:webvtt", "when": "--mode mux with a .webm output"}, {"capability": "encoder:srt", "when": "--mode mux with a .mkv output"}],
                     video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "overlay": dict(role="execution", inputs=["video asset", "image (--image / --logo), text (--text), or a second video (--video) to composite"], outputs=["video artifact with the overlay composited"],
@@ -110,45 +164,61 @@ TOOL_META: Dict[str, Dict[str, Any]] = {
     "multicam": dict(role="execution", inputs=["reference camera", "other cameras / recorders"], outputs=["switched multicam video artifact"],
                      required=FF + [X264, AAC], optional=[HDR_X265],
                      video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
-    "audio": dict(role="execution", inputs=["video or audio asset", "music bed (--music) or replacement track (--replace)"], outputs=["artifact with the processed audio (video stream-copied, or dropped when -o has an audio extension)"],
-                  required=FF + [AAC], optional=[{"capability": "filter:afftdn", "when": "--denoise / --voice"}, {"capability": "filter:sidechaincompress", "when": "--duck"},
-                                                {"capability": "filter:acompressor", "when": "--compress / --voice"}, {"capability": "filter:alimiter", "when": "--limit"}, {"capability": "filter:agate", "when": "--gate"}] + AUDIO_OUT,
+    "audio": dict(role="execution", inputs=["video or audio asset", "music bed (--music) or replacement track (--replace)", "effects/atmos track (--effects)"], outputs=["artifact with the processed audio (video stream-copied, or dropped when -o has an audio extension)"],
+                  required=FF, optional=[{"capability": "filter:afftdn", "when": "--denoise / --voice"}, {"capability": "filter:sidechaincompress", "when": "--duck"},
+                                        {"capability": "filter:acompressor", "when": "--compress / --voice"}, {"capability": "filter:alimiter", "when": "--limit / --voice strong"}, {"capability": "filter:agate", "when": "--gate"},
+                                        {"capability": "filter:deesser", "when": "--voice medium (the default) / --voice strong"},
+                                        {"capability": "filter:extrastereo", "when": "--stereo-widen"},
+                                        {"capability": AAC, "when": "output extension isn't .mp3/.opus/.ogg/.flac (audio_codec_for()'s default)"}] + AUDIO_OUT,
                   video_required=False, audio_only=True, visual=False, verify=["probe"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "loudness": dict(role="analysis_and_execution", inputs=["video or audio asset"], outputs=["loudness measurement JSON (--measure-only)", "normalised artifact (video stream-copied)"],
-                     required=FF + ["filter:loudnorm", AAC], optional=AUDIO_OUT,
+                     required=FF + ["filter:loudnorm"], optional=[{"capability": AAC, "when": "output extension isn't .mp3/.opus/.ogg/.flac (audio_codec_for()'s default)"}] + AUDIO_OUT,
                      video_required=False, audio_only=True, visual=False, verify=["probe", "check"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "silence": dict(role="analysis_and_execution", inputs=["video or audio asset"], outputs=["silence list JSON (--list)", "artifact with silences removed", "EDL text (--edl)"],
-                    required=FF + ["filter:silencedetect"], optional=[{"capability": X264, "when": "removing silences from a video"}, HDR_X265, {"capability": AAC, "when": "removing silences from a video"}] + AUDIO_OUT,
+                    required=FF + ["filter:silencedetect"], optional=[{"capability": X264, "when": "removing silences from a video"}, HDR_X265, {"capability": AAC, "when": "removing silences from a video"},
+                                                                    {"capability": "external:whisper", "when": "--filler --transcribe"},
+                                                                    {"capability": "external:parakeet", "when": "--filler --transcribe (English; either engine family satisfies it)"}] + AUDIO_OUT,
                     video_required=False, audio_only=True, visual=False, verify=["probe"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "join": dict(role="execution", inputs=["two or more video assets, or two or more audio-only assets"], outputs=["concatenated video artifact", "concatenated audio artifact (audio-only inputs, audio output extension)"],
-                 required=FF + [X264, AAC, "filter:xfade", "filter:acrossfade"], optional=[HDR_X265] + AUDIO_OUT,
+                 required=FF + ["filter:xfade", "filter:acrossfade"],
+                 optional=[{"capability": X264, "when": "joining video inputs"}, {"capability": AAC, "when": "joining video inputs, or an audio-only join whose output extension isn't .mp3/.opus/.ogg/.flac"}, HDR_X265] + AUDIO_OUT,
                  video_required=False, audio_only=True, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "color": dict(role="execution", inputs=["video asset", ".cube LUT (--lut)"], outputs=["video artifact with converted colour"],
                   required=FF, optional=[{"capability": X264, "when": "--to-sdr / --lut / --correct"}, {"capability": "filter:zscale", "when": "--to-sdr"}, {"capability": "filter:tonemap", "when": "--to-sdr"},
-                                         {"capability": "filter:lut3d", "when": "--lut"}, {"capability": "bsf:filter_units", "when": "--strip-dovi"}, {"capability": X265, "when": "--lut on an HDR source"}, {"capability": AAC, "when": "re-encode"},
+                                         {"capability": "filter:lut3d", "when": "--lut"}, {"capability": "bsf:filter_units", "when": "--strip-dovi"}, {"capability": "bsf:h264_metadata", "when": "--retag on H.264 (without it the video is re-encoded)"},
+                                         {"capability": "bsf:hevc_metadata", "when": "--retag on HEVC (without it the video is re-encoded)"},
+                                         {"capability": "bsf:mpeg2_metadata", "when": "--retag on MPEG-2 (without it the video is re-encoded)"}, {"capability": "bsf:av1_metadata", "when": "--retag on AV1 (without it the video is re-encoded)"},
+                                         {"capability": "bsf:vp9_metadata", "when": "--retag on VP9 (without it the video is re-encoded)"}, {"capability": X265, "when": "--lut on an HDR source"}, {"capability": AAC, "when": "re-encode"},
                                          {"capability": "filter:exposure", "when": "--correct"}, {"capability": "filter:eq", "when": "--correct"},
-                                         {"capability": "filter:colorbalance", "when": "--correct"}, {"capability": "filter:colortemperature", "when": "--correct"}],
+                                         {"capability": "filter:colorbalance", "when": "--correct"}, {"capability": "filter:colortemperature", "when": "--correct"},
+                                         {"capability": "filter:colorlevels", "when": "--correct with any --levels-*"}, {"capability": "filter:curves", "when": "--correct --curves"}],
                   video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "proxy": dict(role="execution", inputs=["video asset"], outputs=["low-resolution, low-bitrate proxy artifact for downstream analysis, preview or editing decisions"],
                   required=FF + [X264, AAC], optional=[HDR_X265],
                   video_required=True, audio_only=False, visual=True, verify=["probe", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "export": dict(role="execution", inputs=["video asset"], outputs=["delivery artifact in the preset's format"],
-                   required=FF, optional=[{"capability": X264, "when": "preset youtube / youtube4k / reels / x"}, {"capability": AAC, "when": "any preset except gif"},
+                   required=FF, optional=[{"capability": X264, "when": "preset youtube / youtube4k / reels / x"}, {"capability": AAC, "when": "preset youtube / youtube4k / reels / x / h265 (prores uses pcm_s16le, copy stream-copies, gif has no audio)"},
                                           {"capability": X265, "when": "preset h265"}, {"capability": "encoder:prores_ks", "when": "preset prores"},
-                                          {"capability": "filter:palettegen", "when": "preset gif"}, {"capability": "encoder:gif", "when": "preset gif"}],
+                                          {"capability": "filter:palettegen", "when": "preset gif"}, {"capability": "encoder:gif", "when": "preset gif"}, {"capability": "filter:boxblur", "when": "--pad-fill blur or --fit blur"},
+                                                     {"capability": "filter:eq", "when": "--fit blur (the background copy is dimmed)"},
+                                          {"capability": "filter:loudnorm", "when": "preset youtube / youtube4k / reels / x with audio: the written file is measured against the platform's loudness target (result `loudness`)"}],
                    video_required=True, audio_only=False, visual=False, verify=["probe", "check"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "check": dict(role="verification", inputs=["media artifact"], outputs=["compliance rows JSON on stdout (no file)"],
-                  required=["ffprobe"], optional=[{"capability": "ffmpeg", "when": "loudness rows (default)"}, {"capability": "filter:loudnorm", "when": "loudness rows (default)"}],
+                  required=["ffprobe"], optional=[{"capability": "ffmpeg", "when": "loudness rows (default); the audio row's volumedetect silence test when loudness is skipped"}, {"capability": "filter:loudnorm", "when": "loudness rows (default)"},
+                                                  {"capability": "filter:blackdetect", "when": "--content (black row)"}, {"capability": "filter:freezedetect", "when": "--content (frozen row)"},
+                                                  {"capability": "filter:silencedetect", "when": "--content (silence row)"}],
                   video_required=False, audio_only=True, visual=False, verify=[], produces_artifact=False, idempotency="bit_exact", deterministic=True),
     "scenes": dict(role="analysis", inputs=["video asset"], outputs=["scene / audio-peak / highlight JSON on stdout", "EDL text (--edl)", "per-scene contact sheet PNG (--sheet)"],
-                   required=FF + ["filter:scdet"], optional=[{"capability": "filter:drawtext", "when": "--sheet"}, {"capability": "filter:tile", "when": "--sheet"}],
+                   required=FF + ["filter:scdet"], optional=[{"capability": "filter:drawtext", "when": "--sheet"}, {"capability": "filter:tile", "when": "--sheet"},
+                                                            {"capability": "ffmpeg", "when": "--beats (one audio decode for the onset pass)"}],
                    video_required=True, audio_only=False, visual=False, verify=[], produces_artifact=True, idempotency="bit_exact", deterministic=True),
     "look": dict(role="verification", inputs=["video artifact"], outputs=["PNG contact sheet / frames / side-by-side"],
-                 required=FF + ["filter:tile"], optional=[{"capability": "filter:drawtext", "when": "timecode stamps (default; --no-timecode to skip)"}, {"capability": "filter:zscale", "when": "HDR source"}, {"capability": "filter:tonemap", "when": "HDR source"}],
+                 required=FF + ["filter:tile"], optional=[{"capability": "filter:drawtext", "when": "timecode stamps (default; --no-timecode to skip)"},
+                                                          {"capability": "filter:drawbox", "when": "--safe NAME (the platform's occluded zones)"}, {"capability": "filter:zscale", "when": "HDR source"}, {"capability": "filter:tonemap", "when": "HDR source"}],
                  video_required=True, audio_only=False, visual=False, verify=[], produces_artifact=True, idempotency="bit_exact", deterministic=True),
-    "render": dict(role="execution", inputs=["project.json (clips, transitions, captions, overlays, audio, loudness, export, check)"], outputs=["final video artifact", "work directory of stage outputs (--keep / --work)"],
-                   required=FF, optional=[{"capability": "delegated", "when": "each stage runs cut / join / fit / caption / overlay / audio / loudness / export / check with their capabilities"}],
-                   video_required=True, audio_only=False, visual=True, verify=["probe", "check", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
+    "render": dict(role="execution", inputs=["project.json (clips, transitions, captions, overlays, audio, loudness, export, check)", "media asset plus --template NAME (a shipped delivery template)"], outputs=["final video artifact", "one artifact per destination plus a pack table (--template all)", "work directory of stage outputs (--keep / --work)", "editor timeline (.fcpxml / .edl / .otio) instead of a render (--export-timeline)"],
+                   required=FF, optional=[{"capability": "delegated", "when": "each stage (and each destination of --template) runs cut / join / fit / caption / graphics / overlay / audio / loudness / export / check with their capabilities"}],
+                   video_required=False, audio_only=True, visual=True, verify=["probe", "check", "look"], produces_artifact=True, idempotency="content_equivalent", deterministic=True),
     "batch": dict(role="execution", inputs=["folder of media", "batch.json recipe (steps or a render project)"], outputs=["one artifact per input file in the recipe's output_dir", "content-hash cache"],
                   required=FF, optional=[{"capability": "delegated", "when": "each recipe step runs the named script with its capabilities"}],
                   video_required=False, audio_only=True, visual=False, verify=["probe"], produces_artifact=True, idempotency="cached", deterministic=True),
@@ -168,10 +238,15 @@ DRY_RUN_ANALYSIS = {
     "multicam": "audio is decoded to align the cameras; the switched output is not written",
     "scenes": "scene and audio-peak measurement runs; --sheet and --edl are not written",
     "report": "probe, loudness and contact-sheet measurements run; the HTML is not written",
+    "cropdetect": "the cropdetect filter runs over the sampled windows to measure bars; this tool never writes a file regardless of --dry-run",
+    "silence": "silencedetect runs so the reported silences and keep ranges are real; the cut output is not written. --filler --transcribe also runs the speech engine (its word timings are what the filler spans are planned on), which may download a model on first use",
+    "loudness": "the loudnorm measurement pass runs so input_i and the planned pass-2 command are real; the normalised output is not written",
+    "check": "read-only tool; the loudness measurement (or, when it is skipped, the audio row's volumedetect) and the --content decode run under --dry-run too, so every row is present",
+    "stabilize": "vidstabdetect (pass 1, into a temp file) runs; the stabilised output (pass 2) is not written",
+    "overlay": "only for a multi-line --text on FFmpeg 8.0, 8.0.1 or 8.1.0: one drawtext measures each line on a generated one-frame picture (the input is not read), so the planned per-line positions are the ones a run uses; otherwise no ffmpeg runs and the composited output is never written",
 }
 DRY_RUN_NOTES = {
     "probe": "read-only tool; --dry-run changes nothing (ffprobe still runs)",
-    "check": "read-only tool; --dry-run skips the ffmpeg loudness measurement, so loudness rows are absent",
     "verify": "not supported: the flag is accepted but the steps run and outputs are written",
 }
 
@@ -185,9 +260,23 @@ DRY_RUN_NOTES = {
 # of the original audio codec never happens on those tools.
 REENCODE_META: Dict[str, Dict[str, str]] = {
     "probe":     dict(video="never", audio="never", note="analysis only, no artifact"),
-    "cut":       dict(video="conditional", audio="conditional", note="lossless -c copy preferred; re-encodes on --accurate, a VFR source, or a keyframe snap past --tolerance (see cut.py --json: mode, keyframe_snapped)"),
+    "cut":       dict(video="conditional", audio="conditional", note="lossless -c copy preferred; re-encodes on --accurate, --codec, a VFR source (--vfr-guard), a keyframe snap past --tolerance, or a --segments join the parts cannot stream-copy (see cut.py --json: mode, reencode_reason, keyframe_snapped)"),
     "fit":       dict(video="always", audio="always", note="always re-encodes to AAC when audio is present, even if only --fps or --aspect was asked for"),
     "crop":      dict(video="always", audio="always", note="the crop filter always forces a re-encode of both streams"),
+    "deinterlace": dict(video="always", audio="always", note="the yadif filter always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "denoise":   dict(video="always", audio="always", note="the hqdn3d filter always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "cropdetect": dict(video="never", audio="never", note="analysis only, no artifact"),
+    "redact":    dict(video="always", audio="always", note="the boxblur, pixelate or delogo graph always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "waveform":  dict(video="always", audio="always", note="always encodes a fresh generated visualization clip; the source audio is always re-encoded to AAC"),
+    "sphere":   dict(video="always", audio="always", note="the v360 filter always forces a re-encode of the video stream; audio is passed through to AAC unchanged"),
+    "straighten": dict(video="always", audio="always", note="the rotate filter always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "grid":      dict(video="always", audio="conditional", note="the xstack composite always forces a re-encode of the video stream; there is no audio at all unless --audio-from picks one input's track, which is then re-encoded to AAC"),
+    "freeze":   dict(video="always", audio="always", note="the tpad/concat filter graph always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "pad":      dict(video="always", audio="always", note="the tpad filter always forces a re-encode of the video stream; audio is re-encoded to AAC when present"),
+    "speedramp": dict(video="always", audio="always", note="setpts/atempo per segment always forces a re-encode of both streams"),
+    "broll":    dict(video="always", audio="conditional", note="the overlay graph always re-encodes the video stream; A's audio is stream-copied under --audio a and re-encoded to AAC under --audio b/mix"),
+    "metadata": dict(video="never", audio="never", note="-c copy on every stream; only the container's chapters and tags change -- --auto-chapters decodes to measure, but still writes with -c copy"),
+    "loop":     dict(video="always", audio="conditional", note="-stream_loop always re-encodes both streams; the audio codec is always AAC when present. --boomerang re-encodes the video through reverse/loop filters and drops the audio"),
     "insert":    dict(video="always", audio="never", note="always encodes a fresh silent clip from the still image; there is no audio stream to touch"),
     "background": dict(video="always", audio="never", note="always encodes a fresh generated clip; there is no input to copy from"),
     "reverse":   dict(video="always", audio="conditional", note="video always re-encodes (reverse buffers and re-emits every frame); audio re-encodes to AAC when present and not dropped by --no-audio"),
@@ -201,8 +290,8 @@ REENCODE_META: Dict[str, Dict[str, str]] = {
     "audio":     dict(video="never", audio="always", note="video stream is always -c:v copy when present; this tool's job is the audio"),
     "loudness":  dict(video="never", audio="always"),
     "silence":   dict(video="always", audio="always", note="removing gaps requires cutting on non-keyframe boundaries"),
-    "join":      dict(video="always", audio="always"),
-    "color":     dict(video="conditional", audio="conditional", note="--strip-dovi and --retag (when the stream copy succeeds) are -c copy of both streams; --retag falls back to re-encoding only if the copy attempt fails; --to-sdr / --lut / --correct always re-encode both"),
+    "join":      dict(video="conditional", audio="conditional", note="--copy --transition none is -c copy of the first video and audio stream (clips with matching parameters only); every other join re-encodes both"),
+    "color":     dict(video="conditional", audio="conditional", note="--strip-dovi and --retag (when the stream copy succeeds) are -c copy of both streams; --retag falls back to re-encoding only if the copy attempt fails or ffprobe still reads the old tags on the copy (a codec with no metadata bitstream filter here); --to-sdr / --lut / --correct always re-encode both"),
     "proxy":     dict(video="always", audio="conditional", note="video is always re-encoded at proxy-grade quality; audio is re-encoded when present, dropped entirely with --no-audio or when the source has none"),
     "export":    dict(video="conditional", audio="conditional", note="--preset copy is -c:v copy -c:a copy (no re-encode); every other preset re-encodes both"),
     "check":     dict(video="never", audio="never", note="read-only, no artifact"),
@@ -215,7 +304,8 @@ REENCODE_META: Dict[str, Dict[str, str]] = {
 }
 
 IDEMPOTENCY = {
-    "bit_exact": "same inputs and flags give byte-identical output",
+    "bit_exact": "same inputs and flags give byte-identical output (with the CPU encoders: under --hw / $FFMPEG_SKILL_HW a "
+                 "VideoToolbox encode is content_equivalent at best)",
     "content_equivalent": "same inputs and flags give the same media content; bytes may differ between encoder builds",
     "cached": "re-runs skip inputs whose content hash and recipe are unchanged",
     "environment_dependent": "output includes timings or machine state and differs between runs",
@@ -268,17 +358,18 @@ def input_schema(parser: argparse.ArgumentParser) -> Dict[str, Any]:
     props: Dict[str, Any] = {}
     required: List[str] = []
     positional: List[str] = []
-    common = {"dry_run", "json", "progress", "fast"}
+    common = {"dry_run", "json", "progress", "fast", "timeout", "overwrite", "plan", "codec", "quality", "hw", "no_hw"}
     for action in parser._actions:
         if isinstance(action, argparse._HelpAction):
             continue
         prop: Dict[str, Any] = _json_type(action)
+        default = action.default
         if action.help and action.help != argparse.SUPPRESS:
-            prop["description"] = action.help % {"default": action.default} if "%(default)" in action.help else action.help
+            prop["description"] = action.help % {"default": default} if "%(default)" in action.help else action.help
         if action.choices:
             prop["enum"] = list(action.choices)
-        if action.default not in (None, False, argparse.SUPPRESS):
-            prop["default"] = action.default
+        if default not in (None, False, argparse.SUPPRESS):
+            prop["default"] = default
         if action.option_strings:
             prop["cli"] = list(action.option_strings)
             if action.required:
@@ -290,6 +381,13 @@ def input_schema(parser: argparse.ArgumentParser) -> Dict[str, Any]:
                 required.append(action.dest)
         if action.dest in common:
             prop["common"] = True
+        if action.dest in props:
+            # one property per dest: a second action (a store_false --no-x beside a store_true --x)
+            # would replace the first, and the contract and MCP would publish only the second flag
+            # under the first one's name -- an MCP `x: true` would then send --no-x
+            first = props[action.dest]["cli"]
+            raise RuntimeError(f"{parser.prog}: {'/'.join(action.option_strings) or action.dest} shares dest {action.dest!r} "
+                               f"with {'/'.join(first) if isinstance(first, list) else 'a positional'}; give each flag its own dest")
         props[action.dest] = prop
     groups = [g for g in getattr(parser, "_mutually_exclusive_groups", []) if g._group_actions]
     schema: Dict[str, Any] = {"type": "object", "properties": props, "required": required, "positional": positional, "additionalProperties": False}
@@ -299,55 +397,353 @@ def input_schema(parser: argparse.ArgumentParser) -> Dict[str, Any]:
     return schema
 
 
-def output_schema(name: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-    """What the tool prints on stdout with --json (keys observed in the implementation)."""
+# The collector's records (docs/design-decisions.md, "Nothing happens silently"): on success and
+# failure documents alike, present only when one list is not empty.
+DIAGNOSTICS_SCHEMA = {
+    "type": "object",
+    "description": "what the run decided on its own, recorded as it happened (each also a stderr line): warnings (something went "
+                   "other than asked), fallbacks (another route was taken and the run went on), skipped (a step that would "
+                   "normally run did not). Each entry is {code, message, ...facts}; an entry a render.py stage reported carries "
+                   "`stage`. Absent when all three are empty",
+    "properties": {k: {"type": "array", "items": {"type": "object", "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}}
+                   for k in ("warnings", "fallbacks", "skipped")},
+}
+
+# error.reason: a stable code for why a refusal happened, beside `kind` (which says what class of
+# failure it is). Every refuse() call in scripts/ names one of these (a test reads the sources).
+ERROR_REASONS = {
+    "output_exists": "an output already exists and --overwrite was not given; details.outputs: [{path, resolved, size, mtime_ns}]",
+    "output_is_input": "the output resolves to the same file as an input; details: {output, input, resolved}",
+    "output_is_directory": "the output path is a directory; details: {output}",
+    "media_path_is_playlist": "an input is a playlist (HLS .m3u8/.m3u or an ffconcat list, by name or by its first bytes) that ffmpeg would follow to the files it names; the skill takes media files only; details: {path}",
+    "media_path_not_a_file": "an input exists but is not a regular file (a FIFO or a device), which ffmpeg would block on or read as a stream; details: {path}",
+    "join_copy_mismatch": "join.py --copy: a clip's streams do not match the first clip's, it hides pre-roll frames with an edit list, or its picture and sound end more than 50 ms apart; details: {clips: [{index?, path, differs}]}",
+    "output_path_taken": "two files one run writes (a side file and the output, or two side files) resolve to the same path, so the second would replace the first; details: {output, other}",
+    "output_looks_like_option": "the output starts with '-' (other than '-' for stdout), which ffmpeg would read as an option; ./name writes a file of that name; details: {output}",
+    "media_path_is_url": "an input or output has a protocol prefix (tcp:, http://, file:, ...) that ffmpeg would open as a URL; the skill reads and writes local files only; details: {path, scheme}",
+    "output_dir_missing": "the output's directory does not exist; details: {output, directory}",
+    "output_dir_not_writable": "the output's directory is not writable; details: {output, directory}",
+    "timemap_path_taken": "silence.py --timemap names the same file as -o, --edl or --plan; details: {timemap, flag, path}",
+    "output_locked": "another run holds the output's lock; details: {lock, output, pid, pid_alive, deadline, why}",
+    "plan_inputs_changed": "render.py PLAN: a fingerprinted input is missing or changed; details: {plan, plan_sha256, checked_at, "
+                           "inputs: [{path, status: unchanged|changed|missing, expected: {size, sha256_head_tail}, actual: {size, "
+                           "sha256_head_tail} | \"missing\"}], unbound_inputs, audit_log}",
+    "plan_version_unsupported": "render.py PLAN: plan_version is not one this version executes; details: {plan, plan_sha256, checked_at, plan_version, supported, audit_log}",
+    "plan_unknown_tool": "render.py PLAN: the plan names no tool render.py can run; details: {plan, plan_sha256, checked_at, tool, audit_log}",
+    "plan_cwd_missing": "render.py PLAN: the directory the plan was made in is gone; details: {plan, plan_sha256, checked_at, cwd, audit_log}",
+    "plan_argv_invalid": "render.py PLAN: argv is not a list; details: {plan, plan_sha256, checked_at, argv_type, audit_log}",
+    "encoder_missing": "--codec av1/prores: the build's encoder list was read and has no encoder for the codec (kind missing_tool); details: {codec, encoders}",
+    "encoder_list_unreadable": "--codec av1/prores: the build's encoder list could not be read, so whether it has the encoder is unknown (kind ffmpeg); details: {codec, encoders, error}",
+}
+
+# The codes of the collector's records (docs/design-decisions.md, "Nothing happens silently"):
+# code -> (bucket, what it records). Every warn()/record_fallback()/record_skip() literal under
+# scripts/ is listed here under its bucket (a test reads the sources), so a caller can switch on
+# a code the contract publishes.
+DIAGNOSTIC_CODES = {
+    # infrastructure (part 1)
+    "stale_lock_taken_over": ("fallbacks", "a dead or past-deadline writer's output lock was taken over; {lock, output, pid, pid_alive, deadline, why}"),
+    "output_unlocked": ("warnings", "no output lock could be created and the run went on without one; {lock, output, error}"),
+    "lock_deadline_unset": ("warnings", "the lock's deadline (its mtime) could not be set; {lock, error}"),
+    "audit_log_unwritable": ("warnings", "an audit record could not be appended; never fails the run; {path, event, error}"),
+    "plan_unbound_inputs": ("warnings", "render.py PLAN: inputs that did not exist when the plan was made, so were not checked; {paths}"),
+    # the runner
+    "odd_dimensions_scaled_even": ("fallbacks", "an encode that failed on odd dimensions was run again scaled to even ones (the frame loses a row or column); {output, scale}"),
+    "measurement_input_pending": ("skipped", "--dry-run: a measurement skipped because its input is an earlier stage's output that does not exist yet; {path}"),
+    "non_av_streams_dropped": ("fallbacks", "the subtitle/data streams could not be copied, so the encode ran again without them (dropped_non_av_streams: true); {output, returncode, error: the first attempt's last stderr lines}; export.py adds dropped: the stream types this retry leaves out (data alone first, then subtitle too)"),
+    "ffmpeg_list_unreadable": ("warnings", "`ffmpeg -encoders` / `-bsfs` could not be read; what needs the list says so instead of 'the build lacks it'; {list, tool, error}"),
+    "timeout_env_invalid": ("warnings", "FFMPEG_SKILL_TIMEOUT was not a number (the default was used) or was negative (read as 0, no limit); {value, timeout}"),
+    # encoder decisions
+    "av1_encoder_libaom": ("fallbacks", "--codec av1 on a build without libsvtav1: libaom-av1 encoded instead; {wanted, used}"),
+    "crf_clamped": ("warnings", "the CRF handed to the encoder was above its maximum and was capped (the HEVC HDR line adds 2); {encoder, requested, asked, used}"),
+    # fonts and text
+    "font_substituted": ("fallbacks", "the asked font family is not installed: fontconfig or the Windows Fonts folder gave another (font_used names it); {asked, file, family, via}"),
+    "font_lacks_script": ("warnings", "an explicit --font does not cover the text's script and is kept as asked; {font, script}"),
+    "font_coverage_unverified": ("warnings", "whether a font covers the text's script could not be checked (no fontconfig / fc-scan); {script, fonts_dir?}"),
+    "font_path_copied": ("fallbacks", "a --font-file under a non-ASCII path was copied to an ASCII one, because drawtext cannot open it on Windows; {font, file}"),
+    "font_path_not_ascii": ("warnings", "a --font-file under a non-ASCII path could not be given an ASCII form on Windows; drawtext may not open it; {font}"),
+    "fonts_dir_lacks_script": ("fallbacks", "no face in --fonts-dir covers the text's script, so one was picked by script; {fonts_dir, script}"),
+    "font_variant_missing": ("fallbacks", "--lang named Traditional Chinese but no Traditional face is installed, so a Simplified one draws it (some glyph forms differ); {lang, file}"),
+    "emoji_monochrome": ("warnings", "emoji drawn by the text font (monochrome at best): no colour path here"),
+    "emoji_stripped": ("warnings", "overlay.py --emoji none: emoji removed from the drawn text; {mode}"),
+    "emoji_assets_missing": ("warnings", "--emoji-assets has no PNG for these clusters; the text font draws them; {missing}"),
+    "drawtext_newline_glyph": ("warnings", "graphics.py --text-render drawtext on FFmpeg 8.0-8.0.1/8.1.0: a box is drawn at each line break of a multi-line label; {text_render}"),
+    "timeline_parse_failed": ("warnings", "render.py --export-timeline: the written file does not read back as its format (the parse step is ok: false); {path, format, error}"),
+    # captions
+    "ass_lines_unshifted": ("warnings", "caption.py --ass --offset: Dialogue lines whose timestamps could not be read were copied unshifted; {path, count, offset}"),
+    "ass_lines_malformed": ("warnings", "caption.py --ass: Dialogue lines that could not be read (fields or start/end) are not counted as cues; {path, count}"),
+    "cues_outside_video": ("warnings", "caption.py: cues wholly outside the video are not drawn; {count, duration}"),
+    "asr_language_assumed": ("warnings", "--transcribe: the language was assumed (English) and the transcript is wrong if it is not"),
+    # analysis
+    "drift_correction_skipped": ("skipped", "sync.py --fix-drift not applied for a source (drift_skipped_reason); {path, reason: too_short | low_confidence, ...}"),
+    "sync_low_confidence": ("warnings", "sync.py / multicam.py: a source's offset has a correlation confidence below 0.1; {path, confidence}"),
+    "cropdetect_windows_failed": ("warnings", "cropdetect.py: sampled windows ffmpeg could not decode (windows_failed); {failed, windows, starts}"),
+    "filler_words_untimed": ("warnings", "silence.py --filler: listed words in the transcript with no usable timing were not removed (filler.matched_untimed); {count}"),
+    "cut_near_sound": ("warnings", "silence.py: a cut point's level is within CUT_SOUND_MARGIN_DB of --threshold, so it may land in a breath or a word's weak tail (cut_warnings lists them)"),
+    "cut_levels_unmeasured": ("warnings", "silence.py: the source could not be decoded to measure the level at each cut; cut_points and cut_warnings are null (unmeasured, not silent)"),
+    "filler_removal_caution": ("warnings", "silence.py --filler: a removed word that is often an ordinary word, or a discourse marker added with --filler-extra (also in filler.warnings)"),
+    # media and defaults
+    "silent_track_mixed": ("warnings", "audio.py --on-silent warn: a silent track was mixed anyway; {tracks}"),
+    "silent_inputs": ("warnings", "join.py --on-silent warn: silent inputs joined anyway (silent); {count}"),
+    "silent_input": ("warnings", "waveform.py: the input audio is silent and the visualisation is a flat line; {path, peak_db}"),
+    "short_inputs": ("warnings", "join.py: inputs shorter than two frames joined anyway (short_segments); {count}"),
+    "duplicate_inputs": ("warnings", "join.py: an input listed more than once is joined each time (duplicates); {count}"),
+    "sequence_gap": ("warnings", "sequence.py: a frame is missing from the numbering and the frames after it are not in the video; {missing, frames_left_out, first_left_out}"),
+    "memory_heavy": ("warnings", "reverse.py / loop.py --boomerang hold every decoded frame in memory and this input is large"),
+    "dovi_not_detected": ("warnings", "color.py --strip-dovi on a stream with no Dolby Vision metadata: unregistered SEI removed anyway"),
+    "frame_from_export_preset": ("warnings", "render.py: frame.width/height taken from the export preset for a frame given only an aspect; {preset, width, height}"),
+    "normalize_on_by_default": ("warnings", "render.py: a platform export preset with no loudness stage got export.py --normalize by default; {preset}"),
+    # degraded or partial results (part 2)
+    "colour_not_converted": ("warnings", "export.py: an HDR or wide-gamut source written by a preset that tags SDR BT.709 without converting it; {preset, hdr_format}"),
+    "output_audio_silent": ("warnings", "export.py: the written audio is silent (-inf LUFS), so no gain meets the platform's loudness; {platform}"),
+    "flash_pass_failed": ("warnings", "check.py --content: the flash pass failed, so the flashes row is not measured (WARN, could not measure); the other rows stand"),
+    "repair_incomplete": ("warnings", "export.py --repair: decode errors remain after the remux (a damaged frame needs a re-encode); {timestamp_warnings, decode_errors}"),
+    "size_over_limit": ("warnings", "export.py --max-mb: the written file is over the size asked for (the encoder overshot its bitrate); {size, limit}"),
+    "loudness_outside_spec": ("warnings", "export.py: the written file's loudness is outside the platform's spec (normalized: after --normalize too); {platform, lufs, tp, normalized}"),
+    "camera_not_started": ("fallbacks", "multicam.py: a range asked for a camera that had not started; camera 0 played it ({start, end, requested_camera, camera, starts_at}); `cuts` names the camera rendered"),
+    "loudness_not_measured": ("warnings", "export.py: the written file's loudness could not be read, so the platform's loudness was not verified (loudness.ok null, a failing loudness verification step)"),
+    "loudness_no_audio": ("skipped", "export.py: a platform preset's loudness check, on a source with no audio"),
+    "report_section_missing": ("warnings", "report.py: a loudness, compliance or contact-sheet section could not be built (also a failing verification step naming the section)"),
+    "report_section_dry_run": ("skipped", "report.py --dry-run draws no contact sheet"),
+    "check_dry_run": ("skipped", "render.py --dry-run does not run a check stage or a plan's check step"),
+    "check_no_output": ("skipped", "render.py PLAN: the tool reported no output for the plan's check step"),
+    "check_nothing_to_check": ("skipped", "render.py: a \"check\" stage with neither \"platform\" nor \"content\": true"),
+    "check_output_unparsed": ("warnings", "render.py: check.py printed no JSON document; `check` is a failure document (error.reason check_output_unparsed)"),
+    "cache_entry_damaged": ("warnings", "render.py --cache: a sidecar that does not parse or an artifact of the wrong size (also an audit line in the cache directory); the stage runs again"),
+    "cache_store_failed": ("warnings", "render.py --cache: a stage's artifact could not be stored; the run is unaffected"),
+    "cache_input_unreadable": ("warnings", "render.py --cache: an input could not be fingerprinted and is keyed as \"missing\""),
+    "cache_ffmpeg_banner_unreadable": ("fallbacks", "render.py --cache: the ffprobe banner could not be read; keyed on major.minor, so builds of one release share entries"),
+    "cache_result_unrecorded": ("skipped", "render.py --cache: a hit from an entry that recorded no stage result, so what that stage verified is unknown"),
+    "recipe_project_unreadable": ("warnings", "batch.py: recipe.project could not be read; the cache key covers the recipe only"),
+    "batch_cache_reset": ("warnings", "batch.py: .ffskill_cache.json did not parse and was started empty (also an audit line)"),
+    "batch_cache_output_changed": ("warnings", "batch.py: a cached item's output was replaced or edited since the batch wrote it; the item runs again"),
+    "batch_cache_entry_unverifiable": ("warnings", "batch.py: a cache entry from before output identities; the item runs again"),
+}
+
+
+# `font_used` on the tools that draw text: which font the text was drawn with, so a run that
+# drew with a substitute says so (with a font_substituted fallback)
+FONT_USED_SCHEMA = {
+    "type": "object",
+    "description": "the font the text was drawn with: {asked, file, family, how, substituted, via?, fonts_dir?}. how: font_file (the "
+                   "caller's file), script (picked to cover the text's script), resolved (the asked family resolved to a file by "
+                   "fc-match or the Windows Fonts folder; for libass, the file fontconfig picks for the family), by_name (no file "
+                   "resolved: ffmpeg/libass look the family up themselves, file null), fonts_dir (caption.py: the family looked up "
+                   "in --fonts-dir first), ass_styles (caption.py --ass: the file's own styles name the fonts). substituted: the "
+                   "file is not the asked family (also a diagnostics.fallbacks entry, font_substituted). overlay.py: with --text; "
+                   "grid.py: with --label auto",
+}
+
+
+def output_schema(name: str, meta: Dict[str, Any], hw: bool = False) -> Dict[str, Any]:
+    """What the tool prints on stdout with --json (keys observed in the implementation). `hw`: the
+    tool takes --hw, so its `notes` can also carry a VideoToolbox encode's quality line."""
     if name == "probe":
         return {"type": "object", "description": "one probe document, or an array of them for several inputs",
                 "properties": {"file": {"type": "string"}, "format": {"type": "string"}, "duration": {"type": "number"}, "size_bytes": {"type": "integer"},
                                "video": {"type": ["object", "null"]}, "audio": {"type": ["object", "null"]}}, "additionalProperties": True}
     base = {"status": {"enum": ["completed"]}, "output": {"type": ["string", "null"], "description": "path written, or null"},
             "dry_run": {"type": "boolean"}, "commands": {"type": "array", "items": {"type": "string"}, "description": "every ffmpeg command line planned or run"},
-            "probe": {"type": "object", "description": "probe of the output when a file was written"}}
+            "probe": {"type": "object", "description": "probe of the output when a file was written"},
+            "output_identity": {"type": "object", "description": "2.24: {size, mtime_ns} of the file this run wrote, absent under --dry-run; pass it to check.py --expect-identity SIZE:MTIME_NS so the check grades this file and not whatever later sits at the path"},
+            "encoder": {"type": "string", "description": "the video encoder the last ffmpeg command used (after any GPU->CPU fallback; under --dry-run the planned one; render.py and waveform.py: their stages' commands included), `copy` for a stream copy; absent when no command encoded video"},
+            "hw": {"type": "object", "description": "present when VideoToolbox was asked for (--hw, $FFMPEG_SKILL_HW, a render.py stage, a batch.py item), on export.py when $FFMPEG_SKILL_HW=1 is set but its delivery preset does not take it, and when this ffmpeg build has no libx264/libx265 and an encode ran on VideoToolbox instead: {requested: whether this run's encodes were asked onto VideoToolbox (false for that export, and for the build without libx264/libx265), source: flag|env|auto (auto: nobody asked, the build has no libx264/libx265 and this Apple Silicon machine ran VideoToolbox in its place), used: true|false whether the encoder that ran last is VideoToolbox, null under --dry-run (nothing ran) and when this process ran no encode itself (batch.py: its stages are child processes; its top-level hw gathers the items' requested/source/fallback/notes and each results row carries its item's encoder and hw), fallback: a job VideoToolbox refused (encoder open or compression session failure; nothing else is retried) was re-encoded on the CPU, notes: why an encode stayed on or fell back to the CPU, and, when $FFMPEG_SKILL_HW chose the GPU and it ran, what that costs and that --no-hw opts out}. A VideoToolbox encode also adds a top-level notes line: its quality is not CRF-equivalent. A kind: ffmpeg failure under --hw / $FFMPEG_SKILL_HW carries encoder and hw too"},
+            "plan": {"type": "string", "description": "with --plan FILE: the plan document written (the run itself is a dry run)"},
+            "verified": {"type": "boolean", "description": "true only when the artifact was written, probed, and every self-check the tool ran (verification) met its target; false under --dry-run"},
+            "verification": {"type": "array", "items": {"type": "object", "properties": {"step": {"type": "string"}, "ok": {"type": "boolean"}, "stage": {"type": "string"}, "property": {"type": "string"}, "expected": {}, "measured": {}, "delta": {}, "tolerance": {}, "provenance": {"enum": ["specification", "user_specified", "independent_measurement", "input_premeasurement"]}, "attribution": {"enum": ["artifact", "reference", "instrument", "provenance", "unresolved"]}}}, "description": "what the tool itself verified: probe, plus loudness (loudness.py, export platform presets; ok false with reason not_measured when it could not be read), check (render), report.py's sections (loudness, compliance, contact_sheet) and batch.py's items (item). render.py also lists every stage's own steps beyond its artifact probe, tagged with `stage` (a cached stage's as recorded), so its `verified` is the conjunction of every stage's. Since 2.18 a step may carry the property it measured with expected, measured, delta, tolerance and the provenance of the expected value; cut, join and export add a `streams` step comparing the output's video/audio streams with the input's; a step with ok false carries `attribution` (unresolved until a tool knows the cause)"},
+            "unverified": {"type": "array", "items": {"type": "string"}, "description": "2.18: the properties of the output this tool did not measure (the unverified range), e.g. caption's rendered_placement; `verified` covers the measured properties only"},
+            "diagnostics": DIAGNOSTICS_SCHEMA}
     extra: Dict[str, Any] = {}
     if name == "check":
         extra = {"platform": {"type": "string"}, "ok": {"type": "boolean"}, "failed": {"type": "integer"}, "warnings": {"type": "integer"},
-                 "checks": {"type": "array", "items": {"type": "object", "properties": {"check": {"type": "string"}, "status": {"enum": ["PASS", "WARN", "FAIL"]}, "value": {}, "expected": {}, "fix": {"type": "string"}, "kind": {"enum": ["format", "judgement"]}}}}}
+                 "input_identity": {"type": "object", "description": "2.24: {size, mtime_ns} of the file graded, the same shape as a writing tool's output_identity"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "present when no --platform was named (youtube was assumed and judgement rows are WARN), or when --compare paired a different number of frames than the reference has"},
+                 "checks": {"type": "array", "items": {"type": "object", "properties": {"check": {"type": "string", "description": "row name; --content adds black, frozen and silence; --compare adds similarity; --expect-identity adds identity; audio FAILs when the track is present but silent (peak <= -50 dBFS)"}, "status": {"enum": ["PASS", "WARN", "FAIL"]}, "value": {}, "expected": {}, "fix": {"type": "string"}, "kind": {"enum": ["format", "judgement"]}}}}}
+    elif name == "caption":
+        extra = {"transcription": {"type": "object", "description": "with --transcribe: {engine, model, language, routing (why auto chose it), detected_language when auto detected it}; when auto ran the English-only Parakeet model on English assumed, notes says so"},
+                 "caption": {"type": "object", "description": "cue layout: shifted / wrapped / rebalanced / split / extended / dropped counts, plus wrap ('phrase' or 'measured'), phrase_breaks (1.16), broken_inside_word -- atoms hard-sliced at the column edge because they did not fit alone even at the size floor (1.18.4) -- and overlong -- now residual: a single character alone wider than the column. Burn mode: cues_burned -- non-blank cues that overlap [0, duration] and are drawn -- and cues_outside -- non-blank cues wholly outside it (2.2.6); a burn with no visible cue is refused, kind input. --ass: ass_malformed -- Dialogue lines that could not be read and are not counted -- and with --offset ass_shifted / ass_unshifted -- lines moved, and lines whose timestamps could not be read, copied as they were (each count above 0 is also a diagnostics.warnings entry)"},
+                 "tracks": {"type": "array", "description": "--mode mux: one entry per subtitle stream in the output ({index, file, language, title, codec, default, cues, kept_from_input}); a stream the input already carried has file null and kept_from_input true (1.16)"},
+                 "subtitle_tracks": {"type": "integer", "description": "--mode mux: how many subtitle streams the output carries"},
+                 "emoji": {"type": "object", "description": "how the emoji in the text were drawn (mode, overlays, missing)"},
+                 "notes": {"type": "array", "items": {"type": "string"}}}
+    elif name == "metadata":
+        extra = {"chapters": {"type": "array", "description": "the chapter markers read back off the written file"},
+                 "tags": {"type": "object"}, "streams_copied": {"type": "boolean"},
+                 "auto_chapters": {"type": "object", "description": "--auto-chapters: {source, min_chapter, max_chapters, proposed, kept, titles, chapters, description_block, files}. titles is always 'placeholder' -- the skill proposes where a chapter starts, never what it is called (1.16)"},
+                 "notes": {"type": "array", "items": {"type": "string"}}}
+    elif name == "waveform":
+        extra = {"audiogram": {"type": "object", "description": "{style, background ('image' or 'color'), image, position, vis_height, platform, captions, title, stages, verified} -- present on every run, so a plain waveform answers background 'color' (1.16)"},
+                 "silent": {"type": ["boolean", "null"], "description": "true when the input audio's whole-file peak is at or below --silence-threshold (default -50 dBFS) and --on-silent warn (default) rendered the flat line anyway, with a notes line; false when audible; null under --dry-run (nothing measured). --on-silent fail refuses as kind input instead; verified is unaffected"},
+                 "notes": {"type": "array", "items": {"type": "string"}}}
     elif name == "scenes":
-        extra = {"file": {"type": "string"}, "duration": {"type": "number"}, "scene_count": {"type": "integer"}, "scenes": {"type": "array"}, "audio_peaks": {"type": "array"}}
+        extra = {"file": {"type": "string"}, "duration": {"type": "number"}, "scene_count": {"type": "integer"}, "scenes": {"type": "array"}, "audio_peaks": {"type": "array"},
+                 "shots": {"type": "array", "description": "--shots (1.18): [{start, end, label, flow_magnitude}]"},
+                 "audio_peaks_db": {"type": "array", "description": "--audio-peaks (1.18): [{time, level}] measured dBFS, distinct from audio_peaks above"},
+                 "speech": {"type": "array", "description": "--speech (1.18): [{time, speech_music_ratio}]"}}
     elif name == "silence":
-        extra = {"silences": {"type": "array"}, "keep": {"type": "array"}, "input_duration": {"type": "number"}, "kept_duration": {"type": "number"}, "removed_seconds": {"type": "number"}}
+        extra = {"silences": {"type": "array"}, "keep": {"type": "array"}, "input_duration": {"type": "number"}, "kept_duration": {"type": "number"}, "removed_seconds": {"type": "number"},
+                 "speech_aware": {"type": "object", "description": "--speech-aware (1.18): {min_silence, floor, breaths_kept, breaths_kept_seconds, breaths}"},
+                 "filler": {"type": "object", "description": "--filler: {lang, source (whisper-json:FILE | whisper:ENGINE | parakeet:ENGINE), engine, transcription (with --transcribe: {engine, model, language, routing}), removed, removed_count, matched_untimed (listed words in the transcript with no usable timing, not removed), matched_too_long (listed words longer than a filler, kept), ...}"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "--filler --transcribe under --engine auto: present when the English-only Parakeet model ran on English assumed (no --filler-lang, no language detected, no Whisper engine installed or none that succeeded); the transcript is wrong if the speech is not English"}}
     elif name == "sync":
-        extra = {"reference": {"type": "string"}, "second": {"type": "string"}, "offset_seconds": {"type": "number"}, "confidence": {"type": "number"}, "meaning": {"type": "string"}, "drift": {"type": "object"}}
+        extra = {"reference": {"type": "string"}, "second": {"type": "string"}, "offset_seconds": {"type": "number"}, "confidence": {"type": "number"}, "meaning": {"type": "string"}, "drift": {"type": "object"},
+                 "sources": {"type": "array", "description": "1.18: [{path, offset_s, confidence, drift_ppm}], one per SOURCE; the only per-source shape once more than one SOURCE is given; with --fix-drift each also carries drift_skipped_reason"},
+                 "drift_skipped_reason": {"type": ["string", "null"], "enum": ["too_short", "low_confidence", None], "description": "--fix-drift, one SOURCE: why the drift correction was not applied (too_short: no tail window far enough from the head; low_confidence: the tail did not correlate), null when it was; also a diagnostics.skipped entry, drift_correction_skipped"}}
     elif name == "look":
         extra = {"outputs": {"type": "array", "items": {"type": "string"}}}
     elif name == "render":
-        extra = {"stages": {"type": "array", "items": {"type": "string"}}, "check": {"type": ["object", "null"]}}
+        extra = {"stages": {"type": "array", "items": {"type": "string"}}, "check": {"type": ["object", "null"], "description": "check.py's document for a \"check\" stage with a platform, \"content\": true, or both; when check.py printed none, a failure document with error.reason check_output_unparsed"},
+                 "cache": {"type": ["object", "null"], "description": "--cache: {dir, ffmpeg, hits, misses, miss_reasons: [{stage, reason: not_cached|sidecar_missing|artifact_missing|sidecar_corrupt|artifact_truncated|no_output_path, ...}], saved_seconds, entries, would_hit (--dry-run)}"},
+                 "caption": {"type": ["object", "null"], "description": "the caption stage's own block, forwarded verbatim from caption.py (cue-layout counts and fit-size keys); null without a caption stage"},
+                 "snap": {"type": ["object", "null"], "description": "a project's \"snap\": cut.py's snap block for the first snapped clip, with every clip's in clips; null when nothing was snapped"},
+                 "intermediate_preset": {"type": ["string", "null"], "description": "2.15: the x264/x265 preset the stages before an encoding export ran at (--intermediate-preset, default superfast since 2.16); null when no stage received it (no encoding export reached, --fast, --stop-after before the export, a copy export, or nothing but the export encoded)"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "each stage's own notes, prefixed with its tool (\"export: loudness ... is outside x's ...\")"},
+                 "plan": {"type": "string", "description": "when the argument was a plan.json (written by <tool> --plan): its path"},
+                 "plan_sha256": {"type": ["string", "null"], "description": "plan execution: sha256 of the plan file as executed"},
+                 "unbound_inputs": {"type": "array", "items": {"type": "string"}, "description": "plan execution: inputs that did not exist when the plan was made, so carry no fingerprint and were not checked (also a diagnostics.warnings entry, code plan_unbound_inputs)"},
+                 "tool": {"type": "string", "description": "plan execution: the tool the plan ran"},
+                 "tool_result": {"type": "object", "description": "plan execution: the tool's own --json document"},
+                 "timeline": {"type": "object", "description": "--export-timeline: format, rate, duration, frames, clips, transition, "
+                              "transition_frames, music, markers, notes, and not_exported (what the project asks for that an "
+                              "editor timeline cannot carry)"}}
     elif name == "verify":
-        extra = {"report": {"type": ["string", "null"]}, "files": {"type": "array"}, "failed": {"type": "integer"}, "total": {"type": "integer"}}
+        extra = {"report": {"type": ["string", "null"]},
+                 "files": {"type": "array", "description": "one entry per file: {file, probe, steps, skipped}. A step is {step, ok, seconds, error (one line, for the table)}, plus the tool's verified when it completed, and on a failure its own kind, reason, message, details and exit_code (reason step_timeout or step_output_unparsed when the tool printed no failure document); skipped lists the steps that do not apply as {step, reason: quick|no_video|no_audio|not_hdr|not_multichannel|input_unreadable, message}"},
+                 "failed": {"type": "integer"}, "total": {"type": "integer"}}
     elif name == "batch":
-        extra = {"results": {"type": "array"}, "processed": {"type": "integer"}, "total": {"type": "integer"}}
+        extra = {"results": {"type": "array", "description": "one row per input, every input (an interrupted batch included): ok (every step completed), verified (every step also verified what it wrote; false under --dry-run) and unverified ([{step, tool, failed}] naming the steps that did not); a failed row's error {step, tool, kind, message, code, reason, details, hint, exit_code} from the failing step's own document; diagnostics from its steps (tagged with step); cache_miss {reason: output_missing|output_changed|entry_unverifiable, ...} when a cache entry was not served; skipped \"timeout\" or \"interrupted\" for an item that never started and interrupted true for one stopped while running. A row whose recipe ran cut.py carries cut_reencoded (each cut.py call's reencoded) and cut_reencode_reasons (each reason those calls named, once per call)"},
+                 "processed": {"type": "integer"}, "total": {"type": "integer"},
+                 "cut_stream_copy": {"type": ["object", "null"], "description": "cut.py calls across the folder: {calls, stream_copy, reencoded, stream_copy_rate}; null when no cut.py step ran"},
+                 "cut_reencode_reasons": {"type": ["object", "null"], "description": "how many cut.py calls named each reencode_reason ({} when none re-encoded); a re-encoded call whose row came from a cache an earlier 2.x batch wrote, which recorded no reasons, counts as unknown; null when no cut.py step ran"}}
     elif name == "report":
-        extra = {"report": {"type": "string"}, "check": {"type": ["object", "null"]}}
+        extra = {"report": {"type": "string"}, "check": {"type": ["object", "null"], "description": "check.py's document for --platform; null when it was not asked for or could not run (a failing compliance verification step then says why)"}}
+    elif name == "export":
+        extra = {"repair": {"type": "object", "description": "--repair (2.24): {before, after}, each {timestamp_warnings, decode_errors} counted over one full decode at -v warning"},
+                 "loudness": {"type": "object", "description": "platform presets with audio: the written file's lufs/tp against the platform's target_lufs/target_tp, ok true when inside the spec; normalized true when --normalize ran loudness.py on the file; silent true (lufs \"-inf\", ok false, no normalize) when the written audio is silent; measured false (lufs, tp and ok null, reason not_measured) when the measurement could not be read"},
+                 "trimmed": {"type": "object", "description": "present when the source was longer than the preset's platform maximum and the export was cut to it (no --allow-long): {from, to} in seconds; notes says so too"},
+                 "non_av_streams": {"type": "object", "description": "the source's subtitle and data streams: {kept: [{type: subtitle|data, index (n-th of its type), codec, language (subtitle), output_codec}], dropped: [{type, index, codec, language, reason: write_failed|gif|not_in_output}]}, read back from the written file (under --dry-run, as planned). A subtitle track is copied when the container holds it as it is, else converted to the container's text track (mov_text in .mp4/.mov, SubRip in .mkv); a trimmed export cuts it at the same point. Both lists are empty for a source with neither"},
+                 "dropped_non_av_streams": {"type": "boolean", "description": "true when non_av_streams.dropped is not empty; a notes line says so too"},
+                 "notes": {"type": "array", "items": {"type": "string"}}}
     elif name == "loudness":
-        extra = {"measured": {"type": "object", "description": "--measure-only prints the loudnorm measurement instead (input_i, input_tp, input_lra, input_thresh, target_offset)"}}
+        extra = {"measured": {"type": "object", "description": "the loudnorm measurement of the input (input_i, input_tp, input_lra, input_thresh, target_offset); with --measure-only it is the whole result"},
+                 "targets": {"type": "object", "description": "the requested lufs / tp / lra"},
+                 "result": {"type": "object", "description": "the written file measured again (input_i, input_tp, input_lra, ...), plus tp_ceiling_used, audio_bitrate_used and encodes"}}
+    elif name == "color":
+        extra = {"dropped_non_av_streams": {"type": "boolean"},
+                 "sdr_path": {"enum": ["tonemap", "gamut"], "description": "--to-sdr only: tonemap for PQ / HLG / Dolby Vision (and --force on an untagged file); gamut for BT.2020 primaries on an SDR transfer, converted to BT.709 without a tone map"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "--to-sdr: which path was taken and why; --retag: why the video was re-encoded (the stream copy failed, or ffprobe still read the old tags on it)"},
+                 "reencoded": {"type": "boolean", "description": "--retag: true when the stream copy could not carry the tags and the video was re-encoded with them on its frames"},
+                 "measurements": {"type": "object", "description": "--correct only: signalstats levels of input and output"}}
+    elif name == "loop":
+        extra = {"boomerang": {"type": "boolean", "description": "--boomerang: frames 0..N-1 then N-2..1, repeated, so neither turnaround frame is shown twice"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "--boomerang on a source with audio: the audio was dropped"}}
     elif name == "cut":
         extra = {"expected_duration": {"type": "number", "description": "seconds requested"},
                  "duration_error_ms": {"type": ["number", "null"], "description": "written minus requested, measured by ffprobe (null under --dry-run)"},
                  "precision": {"enum": ["packet", "sample", "codec_frame", "frame"],
-                               "description": "packet: stream copy on a packet/keyframe boundary; sample: decoded audio trimmed to the sample, lossless output; codec_frame: sample-trimmed then framed by a lossy encoder (priming delay adds to the length); frame: re-encoded video"},
-                 "reencoded": {"type": "boolean"}}
+                               "description": "the whole run's: packet only when nothing re-encoded, the --segments join included (stream copy on a packet/keyframe boundary); sample: decoded audio trimmed to the sample, lossless output; codec_frame: sample-trimmed then framed by a lossy encoder (priming delay adds to the length); frame: re-encoded video"},
+                 "least_exact_precision": {"enum": ["packet", "sample", "codec_frame", "frame"],
+                                           "description": "the least exact segment's precision (the order packet, codec_frame, frame, sample); differs from precision only for an audio-only --segments join of copied and re-encoded parts"},
+                 "keyframe_snapped": {"type": "boolean", "description": "precision is packet: the run is a stream copy end to end, which lands on keyframes and packets. Whether a copied start really moved is start_snapped"},
+                 "start_snapped": {"type": ["boolean", "null"], "description": "measured: true when a copied segment's picture starts more than one frame from its requested start (the keyframe the copy's seek lands on, measured with the seek ffmpeg makes); false when every start is where asked (an MP4 edit list hides the pre-roll, the start is a keyframe, an audio-only copy, or everything re-encoded); null when a copied start was not measured (--dry-run)"},
+                 "reencoded": {"type": "boolean"},
+                 "reencode_reason": {"type": "array", "items": {"enum": ["requested", "codec", "vfr", "vfr_inconclusive", "pcm_container", "copy_failed", "stream_lost", "tolerance", "concat_fallback"]},
+                                     "description": "why anything was re-encoded, distinct values in first-seen order ([] when nothing was): requested (--accurate), codec (--codec), vfr (a variable-frame-rate source forced --accurate), vfr_inconclusive (its frame timing could not be measured), pcm_container (compressed audio into a .wav), copy_failed (the stream copy errored), stream_lost (the copy wrote no video or no audio, as an MPEG-TS copy with no keyframe in its window does), tolerance (a keyframe snap past --tolerance), concat_fallback (--segments parts could not be joined by stream copy)"},
+                 "segment_precision": {"type": ["array", "null"], "items": {"enum": ["packet", "sample", "codec_frame", "frame"]},
+                                       "description": "--segments only: each segment's precision in order; least_exact_precision is the least exact of them (null for a single segment)"},
+                 "edit_list": {"type": "boolean", "description": "--edit-list on a single MP4/MOV stream copy: it kept the edit list it wrote instead of -avoid_negative_ts make_zero, so the keyframe's pre-roll is stored but hidden and the picture and the sound start at the requested time (false for every other path, the default included)"},
+                 "stored_preroll_seconds": {"type": ["number", "null"], "description": "with edit_list: seconds decoded from the keyframe the copy's seek lands on up to the requested start and hidden by the edit list (a player that ignores edit lists shows them); null otherwise"},
+                 "av_start_skew_seconds": {"type": ["number", "null"], "description": "the output's audio start minus its video start (null when either is missing or under --dry-run); reported, never repaired: on a stream copy only, a warning in notes when it is more than max(2 frames, 0.1 s) away from the source's own skew where the copy's picture starts (the keyframe it began from; the requested start under --edit-list), naming --accurate (and --edit-list for a single MP4/MOV copy whose start snapped)"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "stored pre-roll behind an --edit-list edit list, or an --edit-list copy judged by its video; an A/V start skew with its remedies; a source the default --vfr-guard average took for VFR whose sampled timing is constant (naming --vfr-guard sampled), or a sampled measurement that forced or (--vfr-guard off) skipped a re-encode; a --segments segment ended with the video, or held on its last frame for its sound; a --segments join re-cut because the source uses open GOPs, because a later B-frame .mp4/.mov segment starts between keyframes, or because its join check failed"},
+                 "vfr_check": {"type": "object", "description": "the sampled frame timing of a video input that could still stream-copy: under --vfr-guard average (the default) only when its nominal and average frame rates differ, which re-encodes it (reason vfr) whatever the sample says; under sampled or off on every such input (absent for audio-only input or output, --accurate, --codec, or a --dry-run input a plan has not written yet): {heuristic: true, measured, method: \"sampled\", guard, windows, deltas}. measured is sampled_cfr (every packet interval in up to five 6 s windows within a tick, at least 1 ms and at most half a frame, of its window's median, and the windows agree; the file-start window's first interval is ignored), vfr (under sampled, forces a re-encode, reason vfr) or inconclusive (fewer than 20 intervals or ffprobe failed; under sampled, reason vfr_inconclusive). --vfr-guard off keeps the copy either way, with a note. Variable timing between the windows is not seen"},
+                 "lossless_alternative": {"type": ["string", "null"], "description": "when a lossless cut re-encoded because of the keyframe snap: the --start that would stream-copy instead, and how far it is from the request"},
+                 "join_check": {"type": ["object", "null"], "description": "--segments video stream-copy join: the written file measured by demuxing, {packets, expected_packets, max_step_seconds, audio_offset_ms, audio_parts_checked, ok}. expected_packets counts the source's video packets from each part's start keyframe to its end (or the end of the video); max_step_seconds is the largest presentation step (null when vfr_check measured anything but sampled_cfr, e.g. a --vfr-guard off join of variable timing, which checks the count only), and each step at a join must be the step its parts predict within 1 ms; audio_offset_ms is, per part, its sound's shift minus its picture's (+ = sound late) from audio packets matched by CRC32 to the source stream shaped like the joined audio (FFmpeg's default selection may copy one other than a:0; an MPEG-TS source's AAC is hashed without its ADTS headers) (null for a part with no unique match, e.g. digital silence; null as a whole when the source has no audio or the video check failed), and audio_parts_checked counts the measured parts; ok is the conjunction (counts, steps, every measured part within 5 ms), and false means the join was re-cut from the source (concat_fallback) and this is the failed measurement. null for a single segment, audio, --dry-run, --accurate/--codec/a forced re-encode, a segment that re-encoded, or a join that fell back before a copy join was attempted (open GOPs, a later B-frame segment starting between keyframes, parts that differ, a concat error)"},
+                 "declick_ms": {"type": ["number", "null"], "description": "--segments joined by the re-encode (--accurate, a forced re-encode or concat_fallback): the fade in ms asked for on each side of every join, so butted cuts do not click (20 by default, --declick-ms; 0 under --no-declick; the file's own start and end are not faded). Each fade is capped at half its segment, so a segment shorter than twice this is faded for half its length. null when there is no join to fade: a single segment, a source with no audio, or a stream-copy join, whose sound is copied and not faded"},
+                 "segment_end_snap_seconds": {"type": ["array", "null"], "items": {"type": ["number", "null"]}, "description": "--segments stream-copy join: per segment, the signed seconds its end moved to the keyframe the copied part stops at (the first keyframe at or after the requested end, never an earlier one; null for a part that runs to the end of the video, a part of a source with no B-frames, which is cut to its requested end as in every 2.x release, or a Matroska/MPEG-TS part, which is not snapped). null as a whole unless the output is those copied parts: a single segment, audio, --dry-run, or any re-encode or fallback"}}
+    elif name == "multicam":
+        extra = {"cuts": {"type": "array", "description": "[[start, end, camera], ...] on the reference timeline: the camera actually rendered. A range whose camera had not started yet plays camera 0, and diagnostics.fallbacks names the camera asked for (code camera_not_started)"},
+                 "offsets_seconds": {"type": "array"}, "confidence": {"type": "array"}}
     elif name == "join":
-        extra = {"mode": {"enum": ["video", "audio"]}, "clips": {"type": "integer"}, "transition": {"type": "string"}, "expected_duration": {"type": "number"},
+        extra = {"mode": {"enum": ["video", "audio"]}, "clips": {"type": "integer"}, "transition": {"type": "string"},
+                 "expected_duration": {"type": ["number", "null"], "description": "clip lengths minus the transitions; null under --dry-run while an input is pending (its length is unknown)"},
                  "sample_rate": {"type": "integer", "description": "audio mode only"}, "channels": {"type": "integer", "description": "audio mode only"},
-                 "video": {"type": "boolean", "description": "false in audio mode: the output has no video stream"}}
+                 "video": {"type": "boolean", "description": "false in audio mode: the output has no video stream"},
+                 "skipped": {"type": "array", "description": "inputs --on-missing skip left out: [{index, path, reason}] ([] when none were)"},
+                 "silent": {"type": "array", "description": "inputs whose audio peak is at or below --silence-threshold (default -50 dBFS) and that --on-silent warn (default) joined anyway, plus every --allow-silent input that was silent: [{index, path, peak_db, at, end, intended?}]; at/end are the input's start and end in output seconds (a transition overlaps neighbours), intended: true marks an --allow-silent input (joined whatever --on-silent says, no warning). [] otherwise; fail refuses unallowed ones under problems, skip lists them under skipped; an input with no audio stream is never silent"},
+                 "short_segments": {"type": "array", "description": "warning, never a refusal: measured inputs shorter than 2 frames at the join's fps (audio-only join: shorter than 0.05 s), [{index, path, duration}] ([] when none), each also in notes; a pending --dry-run input is not measured"},
+                 "duplicates": {"type": "array", "description": "warning, never a refusal (a repeat can be intended): a path (compared resolved) listed more than once and joined each time, [{path, indices}] with 0-based list positions ([] when none), also in notes"},
+                 "pending": {"type": "array", "description": "--dry-run: inputs that do not exist yet, planned on as an earlier step's output and never also under skipped: [{index, path}] ([] otherwise)"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "--on-silent warn: which silent inputs were joined anyway; short_segments / duplicates: which inputs and why; --dry-run with pending inputs: which ones, what a real run does if one is still missing (including a skip that leaves fewer than two inputs), whether the mode came from the extensions, and which planned numbers are the unmeasured stub's placeholders (a pending first clip's frame and rate, xfade offsets after a pending clip)"}}
     elif name == "audio":
         extra = {"video": {"type": "boolean", "description": "true when the input's video stream was copied; false for an audio output extension (extraction)"},
                  "audio_stream": {"type": "integer", "description": "which input audio stream was processed (--audio-stream)"},
-                 "dynamics": {"type": "array", "items": {"enum": ["agate", "acompressor", "alimiter"]}, "description": "typed dynamics filters applied, in graph order"}}
+                 "dynamics": {"type": "array", "items": {"enum": ["agate", "acompressor", "alimiter"]}, "description": "typed dynamics filters applied, in graph order"},
+                 "silent": {"type": "array", "description": "--on-silent warn (default), only when a track was silent: [{flag, path, peak_db}] for each --music/--replace/--effects file, or under --duck the voice (flag \"input\"), whose whole-file peak is at or below --silence-threshold (default -50 dBFS); it was mixed anyway. --on-silent fail refuses instead, reason \"silent (peak X dBFS)\" in problems"},
+                 "notes": {"type": "array", "items": {"type": "string"}, "description": "present with `silent`: which tracks were silent and how to refuse them"},
+                 "audio": {"type": "object", "description": "what the mix was built from: voice (null | light | medium | strong), stereo_widen, effects/effects_volume, and with --music the music_volume plus duck (null when --duck was not given, else the threshold in dB and linear, ratio, attack_ms, release_ms, amount_db actually used)"}}
+    if name in ("overlay", "graphics", "caption", "grid"):
+        extra["font_used"] = FONT_USED_SCHEMA
+    if name == "cropdetect":
+        extra.update({"windows": {"type": "integer", "description": "sampled windows (--samples)"},
+                      "windows_failed": {"type": "integer", "description": "windows ffmpeg could not decode and that were skipped (a cropdetect_windows_failed warning when > 0); every window failing is a kind ffmpeg failure"}})
     props = dict(base)
     props.update(extra)
+    notes = props.get("notes")
+    if hw:
+        # emit() adds the VideoToolbox quality line to `notes` on every tool that takes --hw, so every
+        # such tool publishes `notes`, and a tool-specific condition (loop's "--boomerang ... the audio
+        # was dropped", export's own lines) is not the only one it can carry
+        gpu = "a line that its quality is not CRF-equivalent (on a VideoToolbox encode: --hw / $FFMPEG_SKILL_HW; see hw)"
+        if isinstance(notes, dict) and notes.get("description"):
+            props["notes"] = dict(notes, description=notes["description"] + "; also " + gpu)
+        else:
+            props["notes"] = dict(notes or {"type": "array", "items": {"type": "string"}}, description=gpu[0].upper() + gpu[1:])
     required = ["status", "output", "dry_run", "commands"]
     return {"type": "object", "properties": props, "required": required, "additionalProperties": True}
+
+@functools.lru_cache(maxsize=1)
+def _unverified_table() -> Dict[str, List[str]]:
+    """emit()'s per-tool unverified range, read where the results are made so the two cannot differ."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from _common.emit import UNVERIFIED
+    return UNVERIFIED
+
+
+def skill_examples() -> Dict[str, List[Dict[str, Any]]]:
+    """1.20.0: per-tool `examples`, parsed from SKILL.md's "User says" / "Do" table -- the
+    same facts that table already states, machine-readable instead of prose-only. A row
+    naming more than one tool (e.g. metadata.py's --auto-chapters row also names render.py)
+    attaches to each; a row naming none (prose only, no backtick command) attaches to none.
+    `prompts` is a list because a row often gives several phrasings ("cut from 1:20 to 2:05",
+    "trim the first 10 s") for the one `command`; `command` has the markdown backticks
+    stripped but otherwise keeps the row's own text (including "or"/"then" alternatives).
+    """
+    examples: Dict[str, List[Dict[str, Any]]] = {}
+    try:
+        lines = (ROOT / "SKILL.md").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return examples
+    in_table = False
+    esc_pipe = "\x00"  # a markdown-escaped "\|" (a literal pipe inside a cell, e.g. broll's --audio b\|mix) is not a column separator
+    for line in lines:
+        if line.startswith("| User says"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            break
+        if line.startswith("|---") or line.startswith("|-----"):
+            continue
+        cells = line.strip().strip("|").replace("\\|", esc_pipe).split("|")
+        if len(cells) != 2:
+            continue
+        prompt_cell, do = (c.replace(esc_pipe, "|").strip() for c in cells)
+        prompts = re.findall(r'"([^"]+)"', prompt_cell) or [prompt_cell.strip('"')]
+        command = re.sub(r"`([^`]*)`", r"\1", do)
+        for tool in dict.fromkeys(re.findall(r"`([a-z][a-z0-9_]*)\.py", do)):
+            examples.setdefault(tool, []).append({"prompts": prompts, "command": command})
+    return examples
 
 
 # ----------------------------------------------------------------------------- environment
@@ -364,7 +760,14 @@ def skill_description() -> str:
     try:
         text = (ROOT / "SKILL.md").read_text(encoding="utf-8")
         m = re.search(r"^description:\s*(.+)$", text, re.M)
-        return m.group(1).strip() if m else ""
+        value = m.group(1).strip() if m else ""
+        # The scalar is single-quoted in SKILL.md: unquoted, the ": " inside the text ("...
+        # requests: cut, trim ...") is a new mapping key to a strict YAML parser and the whole
+        # frontmatter fails to load (GitHub's renderer reported it; npx skills add and Claude
+        # Code's loader parse it strictly). '' is the only escape inside a YAML single-quoted scalar.
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        return value
     except OSError:
         return ""
 
@@ -407,17 +810,24 @@ def _parse_ff_list(flag: str, text: str) -> List[str]:
     return names
 
 
+def _exe(binary: str) -> str:
+    """The ffmpeg/ffprobe the tools run (PATH, or Homebrew's keg-only ffmpeg-full over a lean one:
+    _common.runner.ffmpeg_exe), so doctor reports the build the tools will use, not the one PATH names."""
+    from _common.runner import ffmpeg_exe
+    return ffmpeg_exe(binary)[0]
+
+
 def _ff_listing(binary: str, flag: str) -> Dict[str, Any]:
     """`{"names": [...], "status": parsed | unparsed | failed | missing, "detail": str}` for `ffmpeg <flag>`.
 
     `parsed`: rows recognised. `unparsed`: ffmpeg ran but no row matched, so the capabilities it
     covers are unknown, not absent. `failed`: ffmpeg exited non-zero. `missing`: no binary on PATH.
     """
-    exe = shutil.which(binary)
+    exe = _exe(binary)
     if not exe:
         return {"names": [], "status": "missing", "detail": f"{binary} not on PATH"}
     try:
-        proc = subprocess.run([exe, "-hide_banner", flag], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=_DETECT_TIMEOUT)
+        proc = subprocess.run([exe, "-hide_banner", flag], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=_DETECT_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"names": [], "status": "failed", "detail": f"{binary} {flag} did not exit within {_DETECT_TIMEOUT}s"}
     except OSError as e:
@@ -458,12 +868,30 @@ def _gpu_encoders(encoders_listing: Dict[str, Any]) -> Dict[str, Any]:
     return {"status": "parsed", "present": present}
 
 
+# What the tools do about a build without libx264 / libx265 (_common.decision._vt_in_place_of)
+_VIDEOTOOLBOX_FOR = {"encoder:libx264": "encoder:h264_videotoolbox", "encoder:libx265": "encoder:hevc_videotoolbox"}
+
+
+def _covered_by_videotoolbox(encoders_listing: Dict[str, Any]) -> Dict[str, str]:
+    """`{"encoder:libx264": "encoder:h264_videotoolbox", ...}` for each CPU encoder the (read) listing
+    lacks while the matching VideoToolbox encoder is listed and this machine can run it: the tools
+    encode with the latter there without --hw, so the former does not block anything. Empty
+    otherwise -- an unread listing proves nothing, and a build that has the CPU encoder needs no cover."""
+    if encoders_listing["status"] != "parsed":
+        return {}
+    from _common.runner import hw_platform_reason
+    if hw_platform_reason() is not None:
+        return {}
+    have = set(encoders_listing["names"])
+    return {cap: alt for cap, alt in _VIDEOTOOLBOX_FOR.items() if cap[8:] not in have and alt[8:] in have}
+
+
 def _version_line(binary: str) -> Optional[str]:
-    exe = shutil.which(binary)
+    exe = _exe(binary)
     if not exe:
         return None
     try:
-        proc = subprocess.run([exe, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=_DETECT_TIMEOUT)
+        proc = subprocess.run([exe, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=_DETECT_TIMEOUT)
     except subprocess.TimeoutExpired:
         return None
     first = (proc.stdout or proc.stderr).splitlines()[:1]
@@ -471,15 +899,242 @@ def _version_line(binary: str) -> Optional[str]:
     return m.group(1) if m else (first[0] if first else "unknown")
 
 
+# ----------------------------------------------------------------------------- FFmpeg security advisories
+# doctor's `ffmpeg_security`: a small, dated, hand-maintained table of high-severity FFmpeg CVEs and
+# the first upstream point release on each branch that carries the fix. ffmpeg-skill does not ship
+# FFmpeg, so a user stays exposed to a decoder bug until they upgrade; doctor says so. It reads the
+# table and the local `-version` line only -- no network call, ever (execution.network: false).
+#
+# Source: https://ffmpeg.org/security.html (each release section lists the CVEs it fixes), checked
+# on FFMPEG_ADVISORIES_CHECKED. A branch absent from `fixed_in` had no release listed with the fix
+# on that date. Only CVEs that page lists go in: AISLE's batch (CVE-2026-64830..64835) was not on it
+# on 2026-10-22, so it has no row yet -- add one, with its releases, when the page lists them.
+# When editing: update FFMPEG_ADVISORIES_CHECKED, docs/contract.md and the CHANGELOG together.
+FFMPEG_ADVISORY_SOURCE = "https://ffmpeg.org/security.html"
+FFMPEG_ADVISORIES_CHECKED = "2026-10-22"
+FFMPEG_ADVISORIES: List[Dict[str, Any]] = [
+    {"cve": "CVE-2026-8461", "name": "PixelSmash", "component": "MagicYUV decoder",
+     "kind": "heap out-of-bounds write", "cvss": 8.8,
+     # security.html lists the fix under 9.0, 8.1.2 and 8.0.3; no 7.1.x/7.0.x/6.1.x release carries it
+     "fixed_in": {"8.0": "8.0.3", "8.1": "8.1.2", "9.0": "9.0"}},
+]
+
+
+def _parse_ffmpeg_version(text: Optional[str]) -> Optional[tuple]:
+    """(major, minor, patch) from an `ffmpeg -version` token: `6.1.1`, `8.0`, `n7.1.2`, and distro
+    builds that append to the upstream number (`8.0.1-3ubuntu2`, `7.1.2-0+deb13u1`,
+    `8.1.2-full_build-www.gyan.dev`). None for anything else -- a git snapshot (`N-12345-g...`,
+    `2026-10-01-git-...`) has no release number to compare, and a guess would be a false alarm."""
+    if not text:
+        return None
+    m = re.match(r"n?(\d+)\.(\d+)(?:\.(\d+))?(?![\d.])", text.strip())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def _vstr(v: tuple) -> str:
+    return ".".join(str(x) for x in (v if v[2] else v[:2]))
+
+
+def _advisory_hits(version: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """The table's rows this version is older than (None: the version could not be parsed). A
+    version on a branch the table lists is compared with that branch's fixing release; one on an
+    older branch with no fixing release is compared with the oldest release that has the fix."""
+    v = _parse_ffmpeg_version(version)
+    if v is None:
+        return None
+    hits = []
+    branch = f"{v[0]}.{v[1]}"
+    for adv in FFMPEG_ADVISORIES:
+        fixes = {k: _parse_ffmpeg_version(f) for k, f in adv["fixed_in"].items()}
+        if branch in fixes:
+            first, on_branch = fixes[branch], True
+        else:
+            first, on_branch = min(fixes.values()), False
+        if v < first:
+            hits.append({"cve": adv["cve"], "name": adv["name"], "component": adv["component"], "kind": adv["kind"],
+                         "cvss": adv["cvss"], "first_fix": _vstr(first), "fix_on_branch": on_branch, "branch": branch})
+    return hits
+
+
+def _update_hint(version: str, source: Optional[str]) -> str:
+    """How to update the FFmpeg this version string came from, as one short phrase."""
+    low = version.lower()
+    if "ubuntu" in low or "+deb" in low or "debian" in low:
+        return "sudo apt update && sudo apt install --only-upgrade ffmpeg"
+    system = platform.system()
+    if system == "Darwin":
+        return "brew upgrade ffmpeg-full" if source == "homebrew-ffmpeg-full" else "brew upgrade ffmpeg, or the package manager it came from"
+    if system == "Windows":
+        return "winget upgrade Gyan.FFmpeg, or a newer build from https://ffmpeg.org/download.html"
+    if system == "Linux":
+        return "your distribution's package update, e.g. sudo apt install --only-upgrade ffmpeg or sudo dnf upgrade ffmpeg"
+    return "a newer build from https://ffmpeg.org/download.html"
+
+
+def _advisory_warning(binary: str, version: str, hits: List[Dict[str, Any]], source: Optional[str]) -> str:
+    """One stderr/`warnings` line. It never says the build IS vulnerable: a distro package
+    (Ubuntu `8.0.1-3ubuntu2`, Debian `+deb13u1`) backports fixes without changing the upstream
+    number, and only the upstream number is visible here."""
+    parts = []
+    for h in hits:
+        where = (f"first fixed on the {h['branch']} branch in {h['first_fix']}" if h["fix_on_branch"]
+                 else f"no {h['branch']} release is listed with the fix; the oldest that has it is {h['first_fix']}")
+        parts.append(f"{h['cve']} ({h['component']} {h['kind']}, CVSS {h['cvss']:g}; {where})")
+    return (f"warning: {binary} {version} is older than the first upstream FFmpeg release that fixes "
+            f"{'; '.join(parts)}. A distribution package may have backported the fix without changing the "
+            f"upstream version, so this is not proof the build is vulnerable: update it "
+            f"({_update_hint(version, source)}). Source: {FFMPEG_ADVISORY_SOURCE}, checked {FFMPEG_ADVISORIES_CHECKED}.")
+
+
+def ffmpeg_security(versions: Dict[str, Optional[str]], sources: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
+    """doctor's `ffmpeg_security`: per binary {version, status, advisories}, and `warnings`, one line
+    per distinct version that is older than a fix. `status`: `older_than_fix`, `not_older`, or
+    `unknown` (no binary, or a version this table cannot compare -- which produces no warning).
+    Informational like `fonts`/`gpu_encoders`: it never moves `ok`, a tool's `usable` or the exit code."""
+    sources = sources or {}
+    out: Dict[str, Any] = {"source": FFMPEG_ADVISORY_SOURCE, "checked": FFMPEG_ADVISORIES_CHECKED, "warnings": []}
+    warned = set()
+    for binary in ("ffmpeg", "ffprobe"):
+        version = versions.get(binary)
+        hits = _advisory_hits(version)
+        status = "unknown" if hits is None else ("older_than_fix" if hits else "not_older")
+        out[binary] = {"version": version, "status": status, "advisories": hits or []}
+        if hits and version not in warned:
+            warned.add(version)
+            out["warnings"].append(_advisory_warning(binary, str(version), hits, sources.get(binary)))
+    return out
+
+
+# 2.10.9 deprecates Python 3.9 (docs/contract.md "Deprecation policy"; DEPRECATED below). The same
+# line is printed by bin/install.js (PY39_DEPRECATION there; a test keeps the two equal).
+PY39_DEPRECATION = ("warning: Python 3.9 is deprecated since ffmpeg-skill 2.10.9 (CPython 3.9 reached end of life "
+                    "in October 2025 and gets no security fixes); it still works in 2.x and support ends in 3.0.0: use Python 3.10+.")
+
+
+def python_deprecation(version_info: Optional[tuple] = None) -> Optional[str]:
+    """The deprecation line for this interpreter, or None when it is not a deprecated one."""
+    vi = tuple(version_info if version_info is not None else sys.version_info)[:2]
+    return PY39_DEPRECATION if vi == (3, 9) else None
+
+
+# 2.14.0 deprecates FFmpeg 5.x the same way (DEPRECATED below): 2.x keeps running on it and CI keeps
+# its 5.1.1 job, and the line names 3.0.0 as the release that raises the floor to 6.1. bin/install.js
+# prints it too (FFMPEG5_DEPRECATION there; a test keeps the two equal).
+FFMPEG5_DEPRECATION = ("warning: FFmpeg 5.x is deprecated since ffmpeg-skill 2.14.0 (the 5.x branches date from 2022; "
+                       "Ubuntu 24.04 ships 6.1); it still works in 2.x and support ends in 3.0.0: use FFmpeg 6.1+.")
+
+
+def ffmpeg_deprecation(version: Optional[str]) -> Optional[str]:
+    """The deprecation line for this ffmpeg's version token, or None (not 5.x, or not a release
+    number: a git snapshot gets no line, as with the security advisory)."""
+    v = _parse_ffmpeg_version(version)
+    return FFMPEG5_DEPRECATION if v and v[0] == 5 else None
+
+
+def _exe_report() -> Dict[str, Any]:
+    """`ffmpeg_path` / `ffmpeg_source` / `ffprobe_path` / `ffprobe_source`: which binary the tools run
+    and why ("path": what PATH resolves; "homebrew-ffmpeg-full": macOS, a lean Homebrew ffmpeg on
+    PATH replaced by the keg-only ffmpeg-full of the same prefix, #317). None when not on PATH."""
+    from _common.runner import ffmpeg_exe
+    out: Dict[str, Any] = {}
+    for name in ("ffmpeg", "ffprobe"):
+        path, source = ffmpeg_exe(name)
+        out[f"{name}_path"] = path or None
+        out[f"{name}_source"] = source or None
+    return out
+
+
 def _whisper_available() -> bool:
-    if shutil.which("whisper-cli") or shutil.which("whisper-cpp") or shutil.which("whisper"):
+    from _common.runner import safe_which
+    if safe_which("whisper-cli") or safe_which("whisper-cpp") or safe_which("whisper"):
         return True
     return importlib.util.find_spec("faster_whisper") is not None or importlib.util.find_spec("whisper") is not None
+
+
+def _parakeet_available() -> bool:
+    """parakeet-mlx on PATH, or parakeet-cli with a model it can find (PARAKEET_CPP_MODEL or a
+    .gguf in ~/.cache/parakeet.cpp) -- the same test the speech bridge applies before running it."""
+    from _common.asr import _parakeet_available as runtime_check  # the bridge's own test, not a copy of it
+    from _common.runner import SafeShutil
+    return any(runtime_check(e, SafeShutil(shutil)) for e in ("parakeet-mlx", "parakeet.cpp"))
+
+
+def _hw_default() -> Dict[str, Any]:
+    """--hw's machine facts, normalised (never the raw environment value): whether VideoToolbox
+    constant-quality encoding can run here (the tools' own check: Apple Silicon hardware, also
+    under a Rosetta Python), and whether $FFMPEG_SKILL_HW makes it the default."""
+    from _common.runner import env_hw, hw_platform_reason
+    return {"platform_ok": hw_platform_reason() is None, "default_on": env_hw()}
 
 
 def _default_font() -> str:
     from _common import BRAND_DEFAULTS
     return str(BRAND_DEFAULTS["font"])
+
+
+def _drawtext_probe() -> Dict[str, Any]:
+    """Actually render one frame through drawtext, rather than trusting `-filters` alone.
+
+    `-filters` only reports whether this ffmpeg build was compiled with the filter; it never
+    proves drawtext can actually execute. On some real Windows ffmpeg builds (winget's gyan.dev
+    9.x), drawtext crashes with an access violation whenever it has to resolve a font through
+    fontconfig -- with or without a valid fonts.conf -- so `-filters` correctly reports drawtext
+    present and doctor used to report the capability `available` anyway; every tool that actually
+    used it (look, scenes --sheet, overlay --text, graphics) then crashed on first real use (#100).
+
+    This runs the cheapest real drawtext render there is: a one-frame synthetic clip, with the
+    fontfile= the tools themselves pass by default (_common.fonts.default_font_file), or no font
+    at all where none resolves. A clean exit means drawtext genuinely works for the tools here.
+    Anything that could not prove either way (no ffmpeg, timeout, an ordinary nonzero exit with a
+    real ffmpeg error) is `unknown`, same "unknown is not missing" principle as every other
+    capability here. A crash specifically -- killed by signal on POSIX, or an unhandled access
+    violation surfacing as a huge unsigned exit code on Windows -- folds into `missing`. When the
+    fontfile= render works but a bare one crashes, drawtext stays available and the result
+    carries a `note`: only a fontconfig lookup (`--font <family>` with no file) would crash.
+    """
+    exe = _exe("ffmpeg")
+    if not exe:
+        return {"status": "unknown", "detail": "ffmpeg not on PATH"}
+    # Probe the way the tools call drawtext: with the fontfile= they pick by default (#298). On a
+    # build whose fontconfig lookup crashes (#100) the tools still render, because they never ask
+    # fontconfig; probing only the bare `drawtext=text=x` reported such a machine as missing
+    # drawtext altogether. The bare render still runs, and its crash is reported as a note: it is
+    # the path `--font <family>` without a file would take.
+    from _common.fonts import default_font_file
+    from _common.decision import escape_filter_path
+    font_file = default_font_file(_default_font())
+    result = _drawtext_render(exe, f"drawtext=fontfile={escape_filter_path(font_file)}:text=x" if font_file else "drawtext=text=x")
+    if font_file and result["status"] == "available":
+        bare = _drawtext_render(exe, "drawtext=text=x")
+        if bare["status"] == "missing":
+            result["note"] = ("drawtext renders with fontfile= (what every drawtext tool passes by default) but crashes "
+                              "when it has to resolve a font through fontconfig: pass --font-file, not a bare --font "
+                              "<family>, on this machine (https://github.com/kajisho5/ffmpeg-skill/issues/100)")
+    return result
+
+
+def _drawtext_render(exe: str, vf: str) -> Dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            [exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=1",
+             "-vf", vf, "-frames:v", "1", "-f", "null", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=_DETECT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "unknown", "detail": f"drawtext probe did not exit within {_DETECT_TIMEOUT}s"}
+    except OSError as e:
+        return {"status": "unknown", "detail": f"drawtext probe: {e}"}
+    if proc.returncode == 0:
+        return {"status": "available", "detail": "one-frame drawtext render succeeded"}
+    if proc.returncode < 0 or proc.returncode >= 0x80000000:
+        return {"status": "missing",
+                "detail": f"drawtext render crashed (exit {proc.returncode}) instead of failing cleanly -- "
+                           "the filter is present in this build but cannot render even with the fontfile= the "
+                           "tools pass (see https://github.com/kajisho5/ffmpeg-skill/issues/100)"}
+    tail = " ".join(proc.stderr.strip().splitlines()[-2:])
+    return {"status": "unknown", "detail": f"drawtext probe exited {proc.returncode}: {tail}"}
 
 
 def _font_available(font_name: str) -> Dict[str, Any]:
@@ -494,11 +1149,12 @@ def _font_available(font_name: str) -> Dict[str, Any]:
     silently renders with a different typeface. `fc-match` is queried instead, since it reports the
     family fontconfig actually resolved to; that only equals the request when the font is installed.
     """
-    exe = shutil.which("fc-match")
+    from _common.runner import safe_which
+    exe = safe_which("fc-match")
     if not exe:
         return {"status": "unknown", "detail": "fc-match not on PATH; drawtext succeeding proves nothing (fontconfig substitutes silently), so availability cannot be verified"}
     try:
-        proc = subprocess.run([exe, "--format=%{family}\n", font_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=_DETECT_TIMEOUT)
+        proc = subprocess.run([exe, "--format=%{family}\n", font_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=_DETECT_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"status": "unknown", "detail": f"fc-match did not exit within {_DETECT_TIMEOUT}s"}
     except OSError as e:
@@ -521,6 +1177,7 @@ def required_capabilities() -> Dict[str, List[str]]:
     for meta in TOOL_META.values():
         req.update(meta["required"])
         opt.update(o["capability"] for o in meta["optional"] if o["capability"] != "delegated")
+    opt.update(o["capability"] for o in CODEC_CAPS)
     opt -= req
     return {"required": sorted(req), "optional": sorted(opt)}
 
@@ -539,10 +1196,19 @@ def doctor() -> Dict[str, Any]:
     `missing` (a filter that exists is not reported absent) nor into `available` (a failed detection
     is not a pass). `ok` is true only when nothing required is missing or unknown.
 
+    One exception to "missing blocks": `encoder:libx264` / `encoder:libx265` absent from the build
+    while the matching VideoToolbox encoder is present and this machine can run it (Apple Silicon).
+    The tools use VideoToolbox there without --hw (#314), so the capability is neither `available`
+    (it is not in the build) nor `missing` (nothing is blocked): it is left out of both lists, named
+    in `covered_by`, and a tool that needs it stays usable. A build that has libx264 reports exactly
+    what it did before.
+
     `gpu_encoders` is a separate, honest answer to a question none of the required/optional
     capabilities above ask: which GPU-backed encoders (nvenc, videotoolbox, qsv, vaapi, amf) this
-    ffmpeg BUILD carries, from `-encoders` alone. No tool here requires or uses one -- every tool
-    still assumes CPU x264/x265 -- so `gpu_encoders` never affects `ok` or any tool's `usable`. It
+    ffmpeg BUILD carries, from `-encoders` alone. No tool requires one -- every tool runs on CPU
+    x264/x265 unless `--hw` / FFMPEG_SKILL_HW=1 puts it on VideoToolbox (Apple Silicon only) -- so
+    `gpu_encoders` never affects `ok` or any tool's `usable` (`covered_by` is the one place a
+    VideoToolbox encoder counts: for a libx264/libx265 the build lacks, see above). It
     only proves the build shipped the capability, never that the GPU/driver on this machine will
     actually accept a job (that needs a real encode, which this introspection never runs).
 
@@ -561,6 +1227,9 @@ def doctor() -> Dict[str, Any]:
     sets = {k: set(v["names"]) for k, v in listings.items()}
     state: Dict[str, str] = {}  # capability -> available | missing | unknown
     wanted = required_capabilities()
+    covered = _covered_by_videotoolbox(listings["encoders"])
+    drawtext_probe: Optional[Dict[str, Any]] = None
+    drawtext_crashed = False  # listed but crashed (#100), as opposed to absent from the build
 
     def _from(kind: str, name: str) -> str:
         lst = listings[kind]
@@ -572,89 +1241,214 @@ def doctor() -> Dict[str, Any]:
 
     for cap in wanted["required"] + wanted["optional"]:
         if cap == "ffmpeg":
-            state[cap] = "available" if shutil.which("ffmpeg") else "missing"
+            state[cap] = "available" if _exe("ffmpeg") else "missing"
         elif cap == "ffprobe":
-            state[cap] = "available" if shutil.which("ffprobe") else "missing"
+            state[cap] = "available" if _exe("ffprobe") else "missing"
         elif cap.startswith("encoder:"):
             state[cap] = _from("encoders", cap[8:])
+        elif cap == "filter:drawtext":
+            listing_state = _from("filters", "drawtext")
+            if listing_state == "available":
+                # Only escalate an "available" listing to "missing" on an unambiguous crash --
+                # an ordinary nonzero exit (a real ffmpeg's own -h/-filters-only build variance, or
+                # in tests a fake ffmpeg shim that only implements -filters/-encoders/-bsfs/-version)
+                # proves nothing either way, so it leaves the listing-based result standing rather
+                # than downgrading it; see _drawtext_probe()'s own docstring for why a crash alone
+                # is the one case this exists to catch.
+                probe = _drawtext_probe()
+                if probe.get("note"):
+                    drawtext_probe = probe
+                if probe["status"] == "missing":
+                    drawtext_probe = probe
+                    drawtext_crashed = True
+                    state[cap] = "missing"
+                else:
+                    state[cap] = "available"
+            else:
+                state[cap] = listing_state
         elif cap.startswith("filter:"):
             state[cap] = _from("filters", cap[7:])
         elif cap.startswith("bsf:"):
             state[cap] = _from("bsfs", cap[4:])
         elif cap == "external:whisper":
             state[cap] = "available" if _whisper_available() else "missing"
+        elif cap == "external:parakeet":
+            state[cap] = "available" if _parakeet_available() else "missing"
         else:
             state[cap] = "missing"
     available = sorted(c for c, st in state.items() if st == "available")
-    missing_required = sorted(c for c in wanted["required"] if state[c] == "missing")
-    missing_optional = sorted(c for c in wanted["optional"] if state[c] == "missing")
+    missing_required = sorted(c for c in wanted["required"] if state[c] == "missing" and c not in covered)
+    missing_optional = sorted(c for c in wanted["optional"] if state[c] == "missing" and c not in covered)
     unknown = sorted(c for c, st in state.items() if st == "unknown")
     unknown_required = [c for c in unknown if c in wanted["required"]]
     errors = [f"{k}: {v['detail']}" for k, v in listings.items() if v["status"] in ("unparsed", "failed")]
+    if drawtext_probe is not None and drawtext_probe["status"] != "available":
+        errors.append(f"filter:drawtext: {drawtext_probe['detail']}")
+    notes = [f"filter:drawtext: {drawtext_probe['note']}"] if drawtext_probe and drawtext_probe.get("note") else []
+    notes += [f"{cap}: not in this ffmpeg build; the tools that need it encode with {alt[8:]} (VideoToolbox) instead, so their output is "
+              "not CRF-equivalent (the result's `encoder`/`hw` say so)" for cap, alt in sorted(covered.items())]
+    versions = {"ffmpeg": _version_line("ffmpeg"), "ffprobe": _version_line("ffprobe")}
+    exes = _exe_report()
     return {
         "version": skill_version(),
         "python": ".".join(str(x) for x in sys.version_info[:3]),
-        "ffmpeg": _version_line("ffmpeg"),
-        "ffprobe": _version_line("ffprobe"),
+        "ffmpeg": versions["ffmpeg"],
+        "ffprobe": versions["ffprobe"],
+        **exes,
+        # non-fatal: never part of `ok`, `usable` or the exit code
+        "ffmpeg_security": ffmpeg_security(versions, {b: exes.get(f"{b}_source") for b in versions}),
         "available": available,
         "missing": missing_required,
         "missing_optional": missing_optional,
         "unknown": unknown,
         "detection": {k: {"status": v["status"], "count": len(v["names"]), "detail": v["detail"]} for k, v in listings.items()},
         "errors": errors,
+        **({"notes": notes} if notes else {}),
         "ok": not missing_required and not unknown_required,
-        "tools": _tool_usability(state),
+        "tools": _tool_usability(state, drawtext_crashed, covered),
+        "covered_by": covered,
         "gpu_encoders": _gpu_encoders(listings["encoders"]),
-        "fonts": _fonts_capability(),
+        "hw": _hw_default(),
+        "fonts": _fonts_capability(probe=True),
     }
 
 
-def _fonts_capability() -> Dict[str, Any]:
+def _fonts_capability(probe: bool = True) -> Dict[str, Any]:
+    """The default drawtext family (issue #66) plus, since 1.12, one entry per script the tools
+    can detect: which languages this machine can actually RENDER, not just which filters exist.
+
+    Per script: available (a font file covers it, path in `file`), missing (fontconfig knows none),
+    unknown (no fontconfig to ask -- the same "unknown is not missing" rule every other capability
+    here follows). Informational like the default font and gpu_encoders: a machine with no Thai
+    font is not a broken install, it is a machine that must not be asked to burn Thai captions.
+    """
+    from _common import SCRIPTS, font_for_script, script_font_status, emoji_support
+
     font = _default_font()
     result = _font_available(font)
-    return {"default_font": font, "status": result["status"], "detail": result["detail"]}
+    scripts: Dict[str, Any] = {}
+    for script in SCRIPTS:
+        if script == "latin":
+            continue
+        # script_font_status() is the one place that tells "fontconfig answered, nothing covers
+        # this" (missing) apart from "there is no working fontconfig to ask" (unknown) -- the same
+        # distinction the tools refuse or continue on.
+        status = script_font_status(script)
+        scripts[script] = {"status": status, "file": font_for_script(script) if status == "available" else None}
+    # 1.15: emoji are a separate question from the writing system, and the only honest answer is a
+    # render (an installed colour emoji font proves nothing -- libass on this build may still draw
+    # it monochrome). `probe=False` -- `contract --json --static`, and every static/JSON-only path -- skips
+    # that render, exactly as it skips the rest of the environment detection.
+    return {"default_font": font, "status": result["status"], "detail": result["detail"],
+            "scripts": scripts, "emoji": emoji_support(probe=probe)}
 
 
-def _capability_fix_hint(cap: str) -> str:
+def _fonts_summary_line(fonts: Dict[str, Any]) -> str:
+    """One line for the plain-text doctor: which scripts render here, which do not."""
+    scripts = fonts.get("scripts") or {}
+    by_state: Dict[str, List[str]] = {"available": [], "missing": [], "unknown": []}
+    for name, entry in scripts.items():
+        by_state.setdefault(entry["status"], []).append(name)
+    # the default font's `detail` (which family fontconfig substituted, or why it is unknown) is
+    # the actionable half of a non-available status, and the line has room for it
+    head = f"fonts: '{fonts['default_font']}' {fonts['status']}"
+    detail = fonts.get("detail") or ""
+    # The substituted family is the actionable half of a non-available status, so it goes on the
+    # plain line -- but only while it stays short enough to keep doctor's one-line-per-capability
+    # shape (the longest other line is ~85 chars). A long explanation is --json only.
+    if detail and fonts["status"] != "available" and len(detail) <= 60:
+        head += f" ({detail})"
+    parts = [head]
+    if by_state["available"]:
+        parts.append("renders " + " ".join(by_state["available"]))
+    if by_state["missing"]:
+        parts.append("no font for " + " ".join(by_state["missing"]))
+    if by_state["unknown"]:
+        parts.append("unknown (no fontconfig) " + " ".join(by_state["unknown"]))
+    emoji = fonts.get("emoji") or {}
+    mode = emoji.get("mode")
+    if mode == "color":
+        parts.append("emoji colour")
+    elif mode == "png":
+        parts.append("emoji colour (assets)")
+    elif mode == "mono":
+        parts.append("emoji monochrome -- --emoji-assets DIR for colour")
+    elif mode:
+        parts.append("emoji none")
+    return "; ".join(parts)
+
+
+def _capability_fix_hint(cap: str, drawtext_crashed: bool = False) -> str:
     """One-line, plain-language remedy for a single missing/unknown capability."""
     if cap in ("ffmpeg", "ffprobe"):
         from _common import INSTALL_HINTS
         hint = INSTALL_HINTS.get(platform.system(), "see https://ffmpeg.org/download.html").strip().splitlines()[0].strip()
-        return f"install ffmpeg: {hint}"
+        # a hint's "# why" is a shell comment so the printed line pastes; joined into a fix string
+        # with "; " it would swallow what follows, so show it in parentheses here instead
+        cmd, _, why = hint.partition("#")
+        return f"install ffmpeg: {cmd.strip()} ({why.strip()})" if why else f"install ffmpeg: {hint}"
     system = platform.system()
     if system == "Darwin":
-        full_hint = "on macOS, brew install ffmpeg-full (the plain formula lacks subtitles/drawtext/zscale)"
+        full_hint = ("on macOS, brew install ffmpeg-full; export PATH=\"$(brew --prefix ffmpeg-full)/bin:$PATH\" "
+                     "(ffmpeg-full is keg-only, so installing it does not replace the ffmpeg already found: keep the "
+                     "export in your shell profile; the plain formula lacks subtitles/drawtext/zscale)")
     elif system == "Windows":
         full_hint = "on Windows, winget install Gyan.FFmpeg (the gyan.dev full build carries subtitles/drawtext/zscale; a plain choco ffmpeg package can lack them)"
     else:
         full_hint = "install/build ffmpeg with it enabled"
     if cap.startswith("encoder:"):
         return f"this ffmpeg build has no {cap[8:]} encoder; {full_hint}"
+    if cap == "filter:drawtext" and not drawtext_crashed:
+        return f"this ffmpeg build has no drawtext filter (no freetype); {full_hint}"
+    if cap == "filter:drawtext":
+        return ("drawtext crashed instead of rendering a frame (see errors[] for the exit detail) -- "
+                 "every drawtext tool already resolves a concrete font file automatically when one can "
+                 "be found (#100); if it still crashes, use --no-timecode with look.py or scenes.py "
+                 "--sheet to skip drawtext entirely, or pass --font-file explicitly to overlay.py/"
+                 "graphics.py (the two that accept it) rather than relying on font= resolution")
     if cap.startswith("filter:"):
         return f"this ffmpeg build has no {cap[7:]} filter; {full_hint}"
     if cap.startswith("bsf:"):
         return f"this ffmpeg build has no {cap[4:]} bitstream filter; {full_hint}"
+    if cap.startswith("font:"):
+        from _common import LANGUAGE_NAMES, FONT_INSTALL_HINT
+        script = cap[5:]
+        return (f"no installed font covers {LANGUAGE_NAMES.get(script, script)} text on this machine; "
+                f"{FONT_INSTALL_HINT} (doctor --json .fonts.scripts lists every script)")
     if cap == "external:whisper":
-        return "install a local whisper (whisper-cli, whisper-cpp, faster-whisper or openai-whisper) for --transcribe"
+        return ("install a local whisper (whisper-cli, whisper-cpp, faster-whisper or openai-whisper) for --transcribe; "
+                "faster-whisper and openai-whisper download their model on first use, and every engine transcribes "
+                "on this machine (the audio is never uploaded)")
+    if cap == "external:parakeet":
+        from _common.asr import PARAKEET_MLX_DEFAULT_MODEL
+        return ("for English --transcribe, install parakeet-mlx (uv tool install parakeet-mlx; its first run downloads "
+                f"{PARAKEET_MLX_DEFAULT_MODEL} from Hugging Face, then it transcribes on this machine and the audio is "
+                "never uploaded) or parakeet-cli with a tdt-0.6b-v2 .gguf in ~/.cache/parakeet.cpp; a local whisper "
+                "covers every language")
     return f"'{cap}' is not available; see docs/contract.md"
 
 
-def _tool_usability(state: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+def _tool_usability(state: Dict[str, str], drawtext_crashed: bool = False, covered: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     """Per-tool usable/missing/unknown, folded from the same capability `state` doctor already
     computed. Answers "can I run this tool on this machine today", not just "what capabilities
     exist" -- a caller reading only `available`/`missing` still has to cross-reference each tool's
-    own required-capability list by hand to answer that."""
+    own required-capability list by hand to answer that. A required capability in `covered`
+    (libx264 replaced by VideoToolbox on this machine) blocks nothing; the tool lists it in `covered_by`."""
+    covered = covered or {}
     tools: Dict[str, Dict[str, Any]] = {}
     for name, meta in TOOL_META.items():
         required = list(meta["required"])
-        missing = [c for c in required if state.get(c) == "missing"]
+        missing = [c for c in required if state.get(c) == "missing" and c not in covered]
         unknown = [c for c in required if state.get(c) == "unknown"]
         entry: Dict[str, Any] = {"usable": "no" if missing else ("unknown" if unknown else "yes")}
         if missing:
             entry["missing"] = missing
-            entry["fix"] = "; ".join(dict.fromkeys(_capability_fix_hint(c) for c in missing))
+            entry["fix"] = "; ".join(dict.fromkeys(_capability_fix_hint(c, drawtext_crashed) for c in missing))
         if unknown:
             entry["unknown"] = unknown
+        via = {c: covered[c] for c in required if c in covered}
+        if via:
+            entry["covered_by"] = via
         tools[name] = entry
     return tools
 
@@ -718,6 +1512,19 @@ def capability_map(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 # ----------------------------------------------------------------------------- contract
+def _merge_optional(base: List[Dict[str, Any]], extra: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Optional capabilities de-duplicated by name: a tool that already lists encoder:libx265 for
+    HDR sources gets its `when` extended by the --codec condition instead of a second entry."""
+    out: List[Dict[str, Any]] = [dict(o) for o in base]
+    for o in extra:
+        hit = next((b for b in out if b["capability"] == o["capability"]), None)
+        if hit is None:
+            out.append(dict(o))
+        elif o["when"] not in hit["when"]:
+            hit["when"] = f"{hit['when']}; {o['when']}"
+    return out
+
+
 def tool_spec(name: str, version: str) -> Dict[str, Any]:
     if name not in TOOL_META:
         # a public script without metadata is drift: fail loudly instead of guessing its role or capabilities
@@ -744,18 +1551,22 @@ def tool_spec(name: str, version: str) -> Dict[str, Any]:
         "version": version,
         "description": (parser.description or "").strip().splitlines()[0] if parser.description else "",
         "executable": f"scripts/{name}.py",
+        # 1.20.0: SKILL.md's own request-table rows for this tool, machine-readable
+        "examples": skill_examples().get(name, []),
         "role": meta["role"],
-        "capabilities": {"required": list(meta["required"]), "optional": list(meta["optional"])},
+        "capabilities": {"required": list(meta["required"]), "optional": _merge_optional(meta["optional"], CODEC_CAPS if "codec" in schema["properties"] else [])},
         "inputs": list(meta["inputs"]),
         "outputs": list(meta["outputs"]),
         "input_schema": schema,
-        "output_schema": output_schema(name, meta),
+        "output_schema": output_schema(name, meta, hw="hw" in schema["properties"]),
         "supports_dry_run": supports_dry_run,
         "dry_run": {"supported": supports_dry_run,
                     "ffmpeg_execution": "full" if not supports_dry_run else "analysis_only" if name in DRY_RUN_ANALYSIS else "none",
                     "semantics": "prints the ffmpeg command lines that would run; no output file is written",
                     **({"note": DRY_RUN_ANALYSIS.get(name) or DRY_RUN_NOTES[name]} if name in DRY_RUN_ANALYSIS or name in DRY_RUN_NOTES else {})},
         "supports_json": "json" in schema["properties"],
+        # additive mirror of supports_json (1.11.0): --json-brief is the same document trimmed
+        "supports_json_brief": "json_brief" in schema["properties"],
         "mutates_input": False,
         "produces_artifact": meta["produces_artifact"],
         "verification": {"required": bool(meta["verify"]), "tools": [f"{SKILL_ID}/{t}" for t in meta["verify"]]},
@@ -765,6 +1576,8 @@ def tool_spec(name: str, version: str) -> Dict[str, Any]:
         "reencodes_audio": REENCODE_META.get(name, {}).get("audio", "conditional"),
         **({"reencode_note": REENCODE_META[name]["note"]} if REENCODE_META.get(name, {}).get("note") else {}),
         "requires_visual_verification": meta["visual"],
+        # 2.18: what `verified` does not cover for this tool (the result's `unverified`)
+        "unverified_properties": list(_unverified_table().get(name, [])),
         "audio_only": meta["audio_only"],
         "video_required": meta["video_required"],
         "deterministic_inputs": meta["deterministic"],
@@ -776,10 +1589,150 @@ def tool_spec(name: str, version: str) -> Dict[str, Any]:
 # ----------------------------------------------------------------------------- MCP derivation
 # tools that print JSON without --json (probe) or whose primary output is a file path (look): the transport
 # does not append --json for them (stated in invocation.structured.argument_mapping.json)
+# ----------------------------------------------------------------------------- deprecations
+# What the next major removes, announced here per docs/contract.md's three-step deprecation policy:
+# step 1 (this list, --help text and the CHANGELOG) in a minor, step 2 keeps it working, step 3
+# removes it in the major. `where` says which surface a caller sees it on. Empty at 2.0.0: all
+# five 1.10.0 deprecations were settled by it (REMOVED below).
+DEPRECATED: List[Dict[str, str]] = [
+    # CPython 3.9 reached end of life in October 2025. Raising the floor is a break, so 2.x keeps
+    # running on it (CI still tests 3.9) and doctor / bin/install.js print PY39_DEPRECATION.
+    {"what": "running on Python 3.9 (the requirements.python floor)",
+     "since": "2.10.9", "removed_in": "3.0.0", "where": "behaviour",
+     "replacement": "Python 3.10 or later; on 3.9, doctor and the npx installer print a one-line warning"},
+    # FFmpeg 5.x: the 5.x branches date from 2022 and keep version-specific workarounds alive.
+    # 2.x keeps running on 5.0+ (CI still tests 5.1.1) and doctor / bin/install.js print
+    # FFMPEG5_DEPRECATION; 3.0.0 raises requirements.ffmpeg to 6.1.
+    {"what": "running on FFmpeg 5.x (the requirements.ffmpeg floor)",
+     "since": "2.14.0", "removed_in": "3.0.0", "where": "behaviour",
+     "replacement": "FFmpeg 6.1 or later; on 5.x, doctor and the npx installer print a one-line warning"},
+]
+
+# What 2.0.0 removed or changed, with the version that deprecated each: the "Removed" half of the
+# policy's step 3, kept in the contract so a caller migrating from 1.x can diff it instead of reading
+# a CHANGELOG. docs/contract.md's "What 2.0 changed" table is written from this list.
+REMOVED: List[Dict[str, str]] = [
+    {"what": "--crf as an alias of --quality on every re-encoding tool that takes --quality (export.py keeps --crf: its preset chooses the encoder)",
+     "since": "1.10.0", "removed_in": "2.0.0", "where": "cli",
+     "replacement": "--quality N (the same CRF scale, codec-neutral; each tool's old --crf default is its --quality default)"},
+    {"what": "json and progress in the MCP inputSchema (they are CLI transport flags, not tool arguments)",
+     "since": "1.10.0", "removed_in": "2.0.0", "where": "mcp",
+     "replacement": "nothing: the MCP transport sets them itself; a client that still sends them is not refused"},
+    {"what": "probe's hdr meaning BT.2020 primaries or a PQ/HLG transfer",
+     "since": "1.10.0", "removed_in": "2.0.0", "where": "json",
+     "replacement": "hdr is now true only for PQ / HLG / Dolby Vision (as hdr_signal, which stays); bt2020_or_hdr carries the 1.x meaning"},
+    {"what": "overwriting an existing output without --overwrite (1.x warned)",
+     "since": "1.10.0", "removed_in": "2.0.0", "where": "behaviour",
+     "replacement": "--overwrite as explicit consent; without it an existing output is refused (kind: input) before anything runs"},
+    {"what": "the result_v2 preview key and FFMPEG_SKILL_RESULT_V2 (the v1 top-level keys it was to replace were un-deprecated: they are the 2.0 shape)",
+     "since": "1.10.0", "removed_in": "2.0.0", "where": "json",
+     "replacement": "the top-level keys, unchanged from 1.x; --json-brief for a short document"},
+]
+
+
 MCP_JSON_EXEMPT = ("look", "probe")
+# json/progress are CLI transport flags the MCP server sets itself, not tool arguments: 2.0 leaves
+# them out of every inputSchema (1.10.0-1.x kept them unless FFMPEG_SKILL_MCP_LEAN=1). A client
+# that still sends them is not refused -- build_argv() maps them like any other key.
+MCP_TRANSPORT_FLAGS = ("json", "progress")
+# default MCP tools/list surface (roadmap P1-7, shipped 1.18.3): the 42-tool schema dump costs
+# every MCP session context whether it needs it or not. These 12 are the tools eval iterations
+# 17-20's ground-truth `expect` lists actually name most often across the 118 agent prompts in
+# evals/agent_prompts*.json (render/look/caption/export/check each >=10 hits; fit/cut/audio/
+# loudness/graphics/silence/probe each >=6) -- not a hand-picked "starter" set. `tools/list`
+# returns only these unless FFMPEG_SKILL_MCP_FULL=1 (anything but "" or "0") asks for all 42; the
+# other 30 stay reachable by name through tools/call either way, and `contract --json` always
+# describes all 42.
+MCP_CORE_TOOLS = ("render", "look", "caption", "export", "check", "fit", "cut", "audio", "loudness", "graphics", "silence", "probe")
 MCP_STRUCTURED_NOTE = ("Structured arguments: keys are the input_schema property names (argparse dests), positionals "
                        "are passed by name, output -> -o. Or argv: the raw CLI list (non-canonical; all other keys are then ignored). "
                        "Media paths must be absolute.")
+
+# roadmap 1.20.0 "agent ergonomics": a `prompts` capability with the five workflows an agent asks
+# for most often (per the SKILL.md request table these are built from -- see skill_examples()'s
+# own source, not a separate hand-picked list). Each `template` is filled with `{name}` -> the
+# matching argument's value; a missing optional argument's `{name}` is dropped along with the
+# surrounding text named in `optional` (so "no chapters file" doesn't leave a dangling clause).
+# The five are recipes, not new tool calls -- every command line named is one this skill already
+# runs; `prompts/get` hands back the same facts SKILL.md's own table states, just addressed by
+# workflow instead of by request phrasing.
+MCP_PROMPTS: List[Dict[str, Any]] = [
+    {
+        "name": "reel", "description": "Turn a clip into a captioned vertical delivery (TikTok/Reels/Shorts) and verify it.",
+        "arguments": [{"name": "input", "description": "path to the source video", "required": True},
+                      {"name": "platform", "description": "tiktok | reels | shorts | youtube-shorts (default reels)", "required": False, "default": "reels"},
+                      {"name": "cues", "description": "path to a captions cue file, if the clip needs captions", "required": False}],
+        "optional": {"cues": " with cues from {cues}"},
+        "template": ("Turn {input} into a {platform} deliverable: run `render.py --template {platform} {input}`{cues}, "
+                     "which handles frame, captions, loudness and export in one command. Then verify with "
+                     "`check.py <output> --platform {platform}` before calling it done -- format rows (codec, pixel "
+                     "format, size, true peak, colour tags, VFR) are safe to fix; judgement rows (duration, aspect, "
+                     "fps, loudness) change content, so fix them only when the request implies the answer, otherwise "
+                     "state the choice and its cost. Mention WARNs; do not chase them."),
+    },
+    {
+        "name": "podcast", "description": "Turn an audio recording into a loudness-normalised podcast episode with chapters.",
+        "arguments": [{"name": "input", "description": "path to the source audio", "required": True},
+                      {"name": "chapters", "description": "path to a chapters timing file", "required": False}],
+        "optional": {"chapters": " with chapters from `metadata.py <output> --chapters {chapters}`"},
+        "template": ("Turn {input} into a podcast episode: normalise loudness with `loudness.py {input} -I -16 --tp -1.5`"
+                     "{chapters}, then verify with `check.py <output> --platform podcast` (its chapters and channels rows)."),
+    },
+    {
+        "name": "multicam", "description": "Cut between several camera angles of the same scene.",
+        "arguments": [{"name": "inputs", "description": "the camera files, space-separated", "required": True}],
+        "optional": {},
+        "template": ("Cut between the cameras in {inputs}: `multicam.py {inputs} --switch energy` auto-cuts to the "
+                     "loudest camera at each moment (`--min-shot` sets the shortest allowed shot); a manual spec "
+                     "looks like `--switch \"0-20:0,20-40:1,40-60:2\"`. Check the reported sync confidence per camera "
+                     "-- under 0.3 (or a large offset) is suspect and needs a manual look; these align audio, never lip sync."),
+    },
+    {
+        "name": "delivery_check", "description": "Verify a finished file is ready to upload to a platform.",
+        "arguments": [{"name": "input", "description": "path to the file to check", "required": True},
+                      {"name": "platform", "description": "youtube | reels | tiktok | shorts | x | linkedin | facebook | podcast", "required": True}],
+        "optional": {},
+        "template": ("Verify {input} is ready for {platform}: run `check.py {input} --platform {platform}`. Format "
+                     "rows (codec, pixel format, size, true peak, colour tags, VFR) are safe to fix automatically. "
+                     "Judgement rows (duration, aspect, fps, loudness) change content -- fix only when the request "
+                     "implies the answer, otherwise state the choice and its cost. Mention WARNs; do not chase them."),
+    },
+    {
+        "name": "hdr", "description": "Bring an HDR or Dolby Vision clip down to SDR (or strip only the DV layer).",
+        "arguments": [{"name": "input", "description": "path to the HDR/Dolby Vision source", "required": True},
+                      {"name": "strip_dovi", "description": "true to keep HDR and drop only the Dolby Vision layer, instead of converting to SDR", "required": False}],
+        "optional": {},
+        "template": ("Bring {input} from HDR/Dolby Vision down to SDR: `color.py {input} --to-sdr` (or `--strip-dovi` "
+                     "to keep HDR and only drop the Dolby Vision layer, when strip_dovi is asked for). A flat, washed-out "
+                     "look after a re-encode usually means HDR metadata was lost upstream; `probe` shows `hdr: true` "
+                     "only for a real PQ/HLG/Dolby Vision signal, and `bt2020_or_hdr: true` also for BT.2020 SDR."),
+    },
+]
+
+
+def mcp_prompt_list() -> List[Dict[str, Any]]:
+    """`prompts/list`: name, description and arguments for each of MCP_PROMPTS -- everything but
+    the template, which `prompts/get` fills."""
+    return [{"name": p["name"], "description": p["description"], "arguments": p["arguments"]} for p in MCP_PROMPTS]
+
+
+def mcp_prompt_get(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """`prompts/get`: the filled template as a single user-role text message. Raises KeyError for
+    an unknown prompt name (mirrors call_tool's own unknown-tool handling) and ValueError naming
+    the missing argument when a required one is absent -- both are caller mistakes, not server
+    failures, so the transport turns them into a JSON-RPC error rather than a crash."""
+    by_name = {p["name"]: p for p in MCP_PROMPTS}
+    if name not in by_name:
+        raise KeyError(name)
+    prompt = by_name[name]
+    missing = [a["name"] for a in prompt["arguments"] if a["required"] and not (arguments or {}).get(a["name"])]
+    if missing:
+        raise ValueError(f"prompt {name!r} needs {', '.join(missing)}")
+    fields: Dict[str, str] = {a["name"]: str((arguments or {}).get(a["name"]) or a.get("default", "")) for a in prompt["arguments"]}
+    for opt_name, clause in prompt["optional"].items():
+        fields[opt_name] = clause.format(**fields) if fields.get(opt_name) else ""
+    text = prompt["template"].format(**fields)
+    return {"description": prompt["description"], "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}
 
 
 def mcp_input_schema(spec: Dict[str, Any]) -> Dict[str, Any]:
@@ -826,6 +1779,12 @@ def mcp_input_schema(spec: Dict[str, Any]) -> Dict[str, Any]:
     one_of = [[{"required": [d]} for d in group] for group in src.get("one_of_required", [])]
     if one_of:
         structured["anyOf"] = one_of[0] if len(one_of) == 1 else [{"allOf": [{"anyOf": g} for g in one_of]}]
+    for dest in MCP_TRANSPORT_FLAGS:
+        props.pop(dest, None)
+    if structured.get("required"):
+        structured["required"] = [d for d in structured["required"] if d not in MCP_TRANSPORT_FLAGS]
+        if not structured["required"]:
+            del structured["required"]
     schema: Dict[str, Any] = {"type": "object", "properties": props, "additionalProperties": False}
     if structured:
         schema["anyOf"] = [{"required": ["argv"]}, structured]
@@ -833,8 +1792,25 @@ def mcp_input_schema(spec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def mcp_tool(spec: Dict[str, Any]) -> Dict[str, Any]:
-    """The MCP tools/list entry for a ToolSpec: name, description and the derived inputSchema."""
-    return {"name": spec["name"], "description": f"{spec['description']} {MCP_STRUCTURED_NOTE}".strip(), "inputSchema": mcp_input_schema(spec)}
+    """The MCP tools/list entry for a ToolSpec: name, one-line description and the derived
+    inputSchema. 1.20.0: MCP_STRUCTURED_NOTE used to be appended to every one of the 42
+    descriptions verbatim (the same ~250 characters repeated 42 times in every tools/list dump);
+    it now goes once into the server's `initialize` response (`instructions`) instead, so a tool's
+    own description stays its own one-line sentence."""
+    return {"name": spec["name"], "description": spec["description"], "inputSchema": mcp_input_schema(spec),
+            "annotations": mcp_annotations(spec)}
+
+
+def mcp_annotations(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """MCP ToolAnnotations (spec 2025-06-18) derived from the ToolSpec flags. Hints only: clients
+    must not treat them as a security boundary. Every tool runs locally (no open world); none edits
+    its input in place; a tool that writes nothing is read-only."""
+    writes = bool(spec.get("produces_artifact")) or bool(spec.get("mutates_input"))
+    return {"title": spec["name"],
+            "readOnlyHint": not writes,
+            "destructiveHint": bool(spec.get("mutates_input")),
+            "idempotentHint": spec.get("idempotency_hint") in ("bit_exact", "content_equivalent", "cached"),
+            "openWorldHint": False}
 
 
 def mcp_tools(detect: bool = False) -> List[Dict[str, Any]]:
@@ -845,13 +1821,15 @@ def build(detect: bool = True) -> Dict[str, Any]:
     version = skill_version()
     tools = [tool_spec(n, version) for n in public_tools()]
     wanted = required_capabilities()
-    caps: Dict[str, Any] = {"required": wanted["required"], "optional": wanted["optional"], "naming": "ffmpeg | ffprobe | encoder:<name> | filter:<name> | bsf:<name> | external:whisper"}
+    caps: Dict[str, Any] = {"required": wanted["required"], "optional": wanted["optional"], "naming": "ffmpeg | ffprobe | encoder:<name> | filter:<name> | bsf:<name> | external:whisper | external:parakeet"}
     if detect:
         d = doctor()
         caps.update({"available": d["available"], "missing": d["missing"], "missing_optional": d["missing_optional"],
                      "unknown": d["unknown"], "detection": d["detection"], "detected_by": "doctor"})
     return {
         "contract_version": CONTRACT_VERSION,
+        "deprecated": [dict(d) for d in DEPRECATED],
+        "removed": [dict(d) for d in REMOVED],
         "skill": {
             "id": SKILL_ID,
             "version": version,
@@ -866,12 +1844,25 @@ def build(detect: bool = True) -> Dict[str, Any]:
             },
             "not_provided": ["AI reasoning", "decisions", "production plans", "project IR", "approvals", "network access", "transcription engine"],
         },
-        "requirements": {"python": ">=3.9 (standard library only)", "ffmpeg": ">=5.0", "ffprobe": ">=5.0", "node": ">=16 (npx installer only)"},
+        "requirements": {"python": ">=3.9 (standard library only; 3.9 deprecated since 2.10.9, removed in 3.0.0; 3.10+ recommended)", "ffmpeg": ">=5.0 (5.x deprecated since 2.14.0, removed in 3.0.0; 6.1+ recommended)", "ffprobe": ">=5.0", "node": ">=16 (npx installer only)"},
         "execution": {
             "shell": False,
             "arbitrary_executables": False,
-            "subprocess": "argv list only: [python3, scripts/<tool>.py, ...] and [ffmpeg|ffprobe, ...] resolved from PATH",
+            "subprocess": "argv list only: [python3, scripts/<tool>.py, ...] and [ffmpeg|ffprobe, ...] resolved from PATH; "
+                          "with --transcribe, a local speech engine's CLI (whisper.cpp's whisper-cli / whisper-cpp / main, "
+                          "openai-whisper's whisper, parakeet-mlx, parakeet-cli) resolved from PATH",
             "network": False,
+            # `network` is about the skill's own code. A speech engine may fetch its model weights the
+            # first time it runs; faster-whisper is a library, so its fetch is made from the skill's own
+            # process. A caller that sandboxes the network must know that before a first --transcribe.
+            "model_downloads": {
+                "when": "first use of a speech engine (--transcribe; silence.py --filler --transcribe runs it under --dry-run too, caption.py --transcribe does not) whose model is not cached yet; media is never uploaded",
+                "in_process": {"faster-whisper": "Hugging Face (Systran/faster-whisper-<model>)"},
+                "child_process": {"parakeet-mlx": "Hugging Face (mlx-community/parakeet-*)",
+                                  "openai-whisper": "OpenAI (its model checkpoint)"},
+                "none": ["whisper.cpp", "parakeet.cpp"],
+                "offline": "HF_HUB_OFFLINE=1 keeps faster-whisper and parakeet-mlx on the cached copy",
+            },
             "input_mutation": False,
         },
         "invocation": {
@@ -898,8 +1889,26 @@ def build(detect: bool = True) -> Dict[str, Any]:
         },
         "json_output": {
             "success": {"status": "completed", "exit_code": 0, "stdout": "one JSON document (output_schema)"},
-            "failure": {"status": "failed", "exit_code": "non-zero (127 when ffmpeg/ffprobe is missing)", "stdout": "{\"status\": \"failed\", \"exit_code\": N, \"error\": {\"kind\": ..., \"message\": ...}, \"commands\": [...]} when --json was given", "stderr": "human-readable message"},
-            "error_kinds": {"input": "missing or unsuitable input, bad arguments", "ffmpeg": "ffmpeg/ffprobe returned an error (message carries the last stderr lines)", "output": "ffmpeg exited 0 but the artifact is missing, empty or unreadable (an empty file is removed)", "missing_tool": "ffmpeg or ffprobe not on PATH"},
+            "failure": {"status": "failed", "exit_code": "non-zero (127 when ffmpeg/ffprobe is missing)", "stdout": "{\"status\": \"failed\", \"exit_code\": N, \"error\": {\"kind\": ..., \"message\": ..., \"code\": ..., \"retryable\": false}, \"commands\": [...]} when --json was given; a refusal adds error.reason (error_reasons) and error.details (the facts the message is written from), and a run that recorded warnings, fallbacks or skipped steps before failing carries diagnostics", "stderr": "human-readable message",
+                        "error": {"kind": "error_kinds", "message": "the reason in prose", "code": "a static relabelling of kind", "retryable": "always false",
+                                  "hint": "optional: the flag change that would make a retry meaningful",
+                                  "reason": "optional, on refusals: a stable code from error_reasons",
+                                  "details": "optional, with reason: an object of the facts behind the refusal (paths, expected and actual values)"},
+                        "diagnostics": DIAGNOSTICS_SCHEMA["description"]},
+            "error_reasons": ERROR_REASONS,
+            "diagnostic_codes": {code: {"bucket": bucket, "meaning": meaning} for code, (bucket, meaning) in DIAGNOSTIC_CODES.items()},
+            "audit_log": {"format": "JSON lines, appended: {ts, tool, event, pid, plan_sha256 (plan events), details}",
+                          "events": {"plan_rejected": "render.py refused a plan (details: the refusal's error.details plus reason)",
+                                     "lock_takeover": "a stale output lock was taken over (details: lock, output, pid, pid_alive, deadline, why)",
+                                     "output_unlocked": "no output lock could be created and the run went on without one",
+                                     "output_is_input_refused": "the output-is-input refusal (only when an audit log was named)",
+                                     "cache_entry_damaged": "render.py --cache: a damaged entry (details: stage, reason, key, sidecar or artifact, sizes)",
+                                     "batch_cache_reset": "batch.py: .ffskill_cache.json did not parse and was started empty (details: path, size, error)"},
+                          "location": "render.py --audit-log FILE when given; otherwise a refused plan's <plan>.audit.jsonl, a lock event's "
+                                      "hidden .<output>.ffskill-audit.jsonl beside the output, and a cache event's .ffskill-audit.jsonl in the "
+                                      "cache directory (render.py --cache DIR) or the batch's output_dir. Never written under --dry-run; a write that "
+                                      "fails is a diagnostics.warnings entry (audit_log_unwritable), never a failure"},
+            "error_kinds": {"input": "missing or unsuitable input, bad arguments", "ffmpeg": "ffmpeg/ffprobe returned an error (message carries the last stderr lines)", "output": "ffmpeg exited 0 but the artifact is missing, empty or unreadable (an empty file is removed)", "missing_tool": "ffmpeg or ffprobe not on PATH", "timeout": "one ffmpeg/ffprobe run exceeded --timeout (default 1800 s, FFMPEG_SKILL_TIMEOUT) and was killed; partial output removed; exit 124", "verification": "the tool ran but its result failed the requested check: check.py platform rows (checks attached), render.py's check stage (output written, check attached), batch.py items (results attached), verify.py steps (files attached), color.py --retag (output written, but ffprobe does not read the requested colour tags on it); exit 1", "interrupted": "the tool received SIGINT or SIGTERM: the running ffmpeg (or sibling script) was stopped and its partial output removed; exit 130 or 143"},
             "success_criterion": "exit 0 AND the output exists AND is non-empty AND ffprobe reads a stream from it; only then is status completed printed and the output probe attached",
         },
         "capabilities": caps,
@@ -917,24 +1926,44 @@ def main() -> int:
     args = ap.parse_args()
     if args.command == "doctor":
         d = doctor()
+        # Advisories, never failures: on stderr in both modes, so `doctor --json`'s stdout stays one
+        # JSON document. The FFmpeg ones are also in the document (`ffmpeg_security.warnings`); the
+        # Python 3.9 deprecation is stderr-only, as every deprecation warning is (docs/contract.md
+        # "Deprecation policy" step 1), and machine-readable in `contract --json`'s `deprecated`;
+        # so is the FFmpeg 5.x one.
+        for line in [python_deprecation(), ffmpeg_deprecation(d.get("ffmpeg"))] + d["ffmpeg_security"]["warnings"]:
+            if line:
+                print(line, file=sys.stderr)
         if args.json:
             print(json.dumps(d, indent=2, sort_keys=True))
         else:
             print(f"ffmpeg-skill {d['version']} (this installed copy; re-run `npx ffmpeg-skill` to refresh it -- copies are not updated automatically)")
             print(f"python {d['python']}; ffmpeg {d['ffmpeg'] or 'MISSING'}; ffprobe {d['ffprobe'] or 'MISSING'}")
-            print(f"available: {', '.join(d['available'])}")
+            for name in ("ffmpeg", "ffprobe"):
+                if d[f"{name}_source"] == "homebrew-ffmpeg-full":
+                    print(f"{name} runs from {d[f'{name}_path']}: Homebrew's keg-only ffmpeg-full, used because the {name} on PATH is the lean formula (no drawtext/subtitles)")
+            # counts, not the full capability list: the names of the ~60 available capabilities
+            # answer no question a caller has (they are in `doctor --json .available` when one
+            # does), while what is MISSING is the whole reason to run doctor (1.11.0 token diet).
+            head = (f"{'ok' if d['ok'] else 'NOT ok'}: {len(d['available'])} capabilities available, "
+                    f"{len(d['missing'])} required missing, {len(d['missing_optional'])} optional missing")
+            if d["unknown"]:
+                head += f", {len(d['unknown'])} unknown"
+            print(head)
             print(f"missing required: {', '.join(d['missing']) or 'none'}")
             print(f"missing optional: {', '.join(d['missing_optional']) or 'none'}")
             if d["unknown"]:
                 print(f"unknown (detection failed, not proven missing): {', '.join(d['unknown'])}")
+            for cap, alt in sorted(d["covered_by"].items()):
+                print(f"{cap} is not in this build; VideoToolbox ({alt[8:]}) encodes in its place (not CRF-equivalent)")
             not_usable = sorted(name for name, t in d["tools"].items() if t["usable"] != "yes")
             if not_usable and d["ok"]:
                 print(f"note: overall 'ok' means nothing REQUIRED BY EVERY TOOL is missing -- {len(not_usable)} tool(s) still can't run today: {', '.join(not_usable)} (see doctor --json .tools for why)")
             gpu = d["gpu_encoders"]
             if gpu["status"] == "parsed":
-                print(f"GPU-backed encoders in this build: {', '.join(gpu['present']) or 'none'} (no tool here uses one yet; this build-presence check does not prove the GPU/driver will accept a job)")
-            fonts = d["fonts"]
-            print(f"default drawtext font '{fonts['default_font']}': {fonts['status']} ({fonts['detail']})")
+                print(f"GPU-backed encoders in this build: {len(gpu['present'])} (only --hw / FFMPEG_SKILL_HW=1 use one, VideoToolbox on Apple Silicon; names in doctor --json)")
+            print(_fonts_summary_line(d["fonts"]))
+            print("full detail: doctor --json (capability lists, per-tool `usable`, fix hints)")
             for err in d["errors"]:
                 print(f"detection error: {err}", file=sys.stderr)
         if d["ok"]:

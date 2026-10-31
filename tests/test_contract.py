@@ -8,6 +8,8 @@ def test_provides_tool_ids_use_the_short_subtitle_prefix():
     assert provides == [
         {"id": "subtitle.generate", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/generate"},
         {"id": "subtitle.render", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/render"},
+        {"id": "subtitle.translate", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/translate"},
+        {"id": "subtitle.mux", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/mux"},
     ]
 
 

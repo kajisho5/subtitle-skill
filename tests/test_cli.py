@@ -112,8 +112,9 @@ def test_run_missing_field_is_typed_error(tmp_path):
 
 
 def test_run_unsupported_operation(tmp_path):
+    # `translate` became a real operation (roadmap step 5); transcription stays out of scope
     request = {
-        "operation": "translate",
+        "operation": "transcribe",
         "workspace": str(tmp_path),
         "format": "srt",
         "output_path": "o.srt",

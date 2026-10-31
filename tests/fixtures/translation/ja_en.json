@@ -1,0 +1,86 @@
+{
+  "description": "ja->en acceptance fixture (roadmap step 5). engine 'memory' stands in for an MT engine so the expected output is exact; the pipeline around the engine (segmenting, glossary check, target-language layout, validation) is the code under test. Expected values worked out by hand: English has no locale profile, so lines are wrapped at spaces to 42 characters. Two-line breaks prefer a natural break (after punctuation) and then the shortest longer line.",
+  "source": {
+    "id": "ep01",
+    "language": "ja",
+    "cues": [
+      {
+        "id": "1",
+        "start": 0.5,
+        "end": 3.0,
+        "text": "今日は字幕の\n翻訳を試します。",
+        "speaker": "A"
+      },
+      {
+        "id": "2",
+        "start": 3.2,
+        "end": 4.0,
+        "text": "よろしく。"
+      },
+      {
+        "id": "3",
+        "start": 4.5,
+        "end": 9.0,
+        "text": "用語集にある言葉は\n必ず同じ訳語になります。"
+      }
+    ]
+  },
+  "glossary": [
+    {
+      "source": "字幕",
+      "target": "subtitles"
+    },
+    {
+      "source": "用語集",
+      "target": "glossary"
+    }
+  ],
+  "translation_memory": [
+    {
+      "source": "今日は字幕の翻訳を試します。",
+      "target": "Today we will try translating subtitles."
+    },
+    {
+      "source": "よろしく。",
+      "target": "Nice to meet you, and thanks for watching today."
+    },
+    {
+      "source": "用語集にある言葉は必ず同じ訳語になります。",
+      "target": "A word in the term list always gets the same translation."
+    }
+  ],
+  "expected": {
+    "language": "en",
+    "cues": [
+      {
+        "id": "1",
+        "start": 0.5,
+        "end": 3.0,
+        "text": "Today we will try translating subtitles.",
+        "speaker": "A"
+      },
+      {
+        "id": "2",
+        "start": 3.2,
+        "end": 4.0,
+        "text": "Nice to meet you,\nand thanks for watching today."
+      },
+      {
+        "id": "3",
+        "start": 4.5,
+        "end": 9.0,
+        "text": "A word in the term list always\ngets the same translation."
+      }
+    ],
+    "observations": [
+      {
+        "code": "READING_SPEED_TOO_HIGH",
+        "cue_id": "2"
+      },
+      {
+        "code": "GLOSSARY_TERM_MISSING",
+        "cue_id": "3"
+      }
+    ]
+  }
+}

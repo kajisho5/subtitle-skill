@@ -18,6 +18,7 @@ import sys
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from .engine import FFMPEG_SKILL_DIR_ENV, resolve_ffmpeg_skill_root
 from .formats import SUPPORTED_FORMATS
+from .translation import engine_status
 
 #: Capabilities ffmpeg-skill's `caption` tool always requires, per its own
 #: contract (scripts/_contract.py TOOL_META["caption"]["required"]).
@@ -102,9 +103,12 @@ def build_doctor_report() -> dict:
                     }
                 )
 
-    available_operations = ["generate"]
+    # translate always runs with engine "memory"; which other engines can run
+    # here is reported under translation_engines (an engine that cannot run is
+    # optional, never a problem). mux needs exactly what render needs.
+    available_operations = ["generate", "translate"]
     if render_available:
-        available_operations.append("render")
+        available_operations += ["render", "mux"]
 
     return {
         "skill": SKILL_ID,
@@ -114,6 +118,7 @@ def build_doctor_report() -> dict:
         "supported_formats": list(SUPPORTED_FORMATS),
         "render_supported_formats": list(RENDER_SUPPORTED_FORMATS),
         "dependencies": {"ffmpeg-skill": ffmpeg_skill_dependency},
+        "translation_engines": engine_status(),
         "problems": problems,
         "healthy": not any(p.get("severity", "blocking") == "blocking" for p in problems),
     }

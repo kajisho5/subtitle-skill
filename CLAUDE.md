@@ -185,13 +185,15 @@ definitions and force_style construction, not assumed:
 
 ## Capabilities (what this repo actually exposes)
 
-Two operations, both real and tested — see `contract --json` as the
+Four operations, all real and tested — see `contract --json` as the
 authoritative source, never re-describe this from memory:
 
 | Operation | Formats | Depends on |
 |---|---|---|
 | `generate` | SRT, WebVTT | nothing external |
 | `render` | SRT only | a reachable ffmpeg-skill install (`caption` + `probe` tools) |
+| `translate` | SRT, WebVTT | engine `memory`: nothing; `argos`: argostranslate + an installed package; `deepl`: `DEEPL_AUTH_KEY` |
+| `mux` | SRT only | ffmpeg-skill (`caption` + `probe`); 1.16+ for more than one track |
 
 Capability/error/format lists live in code (`src/subtitle_skill/contract.py`,
 `src/subtitle_skill/errors.py`, `src/subtitle_skill/doctor.py`) and are
@@ -234,6 +236,32 @@ Ordered by value, not urgency:
    today) — not something to do speculatively.
 
 ### Done since the gaps above were first written
+
+- **Machine translation and multi-language mux** (ECOSYSTEM_ROADMAP steps
+  4-6; `docs/adr/ADR-004-translation-engine.md`,
+  `docs/adr/ADR-005-multi-language-mux.md`; `src/subtitle_skill/translation.py`,
+  `operations._run_translate` / `_run_mux`, `engine.mux_tracks`).
+  `translate`: engines `argos` (default, offline, optional import, never
+  downloads, refused when Argos points at a remote provider), `deepl`
+  (optional, key only from `DEEPL_AUTH_KEY`, native glossary, HTTP layer
+  replaceable for tests), `memory` (caller translation memory). Timecodes
+  kept; text re-broken for the target language; target-language validation
+  plus `GLOSSARY_TERM_MISSING`. `mux`: one `caption.py --mode mux` call with
+  `--srt FILE:LANG` per track, `--min-duration 0` and a high `--max-lines`
+  so caption.py does not re-time the first track (its re-wrap of that track
+  to the frame width cannot be switched off and is reported as
+  `TRACK_RELAID_OUT`). The vendored ffmpeg-skill
+  fixture moved to 2.24.0 for this. **The contract changed**
+  (`operations`, `capabilities`, `parameters`, `provides`, `dependencies.for`):
+  video-production-agent's pinned `contract_0.2.3.json` now drifts fatally
+  (`FATAL_DRIFT_KEYS`) and its `SUPPORTED_SKILL_VERSIONS` (`0.1.`, `0.2.`)
+  does not include the 0.3.x release this ships as -- the agent must re-pin
+  and widen that range before it sees the Skill as available again.
+  Known gaps: no ASS soft tracks (caption.py refuses `--mode mux --ass`);
+  `render`'s single-track `mode: "mux"` still lets caption.py lengthen short
+  cues (left unchanged: an agent-facing behaviour); a sentence split over two
+  cues is translated as two segments; the Argos weights' licence is not
+  stated in its index (ADR-004).
 
 - **Locale profiles for ja / zh / ko** (ECOSYSTEM_ROADMAP.md step 3,
   `src/subtitle_skill/locales.py`, decision and sources in
@@ -333,7 +361,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 197 tests, `pytest -q`, all passing; CI green on
+At last update: 262+ tests, `pytest -q`, all passing; CI green on
 Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.
