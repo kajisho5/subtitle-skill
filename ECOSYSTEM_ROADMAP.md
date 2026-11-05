@@ -41,6 +41,19 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
 - [ ] **8. Captions placed away from faces** — given detection-skill face boxes (`detections@1`, or the reframe path of its step 9 after a crop), each cue moves from the bottom to the top safe area while a face overlaps the bottom caption box. One move per cue, never mid-cue; a minimum hold so captions do not jump between neighbouring cues; a fixed region the caller names (a sign-language window, a lower third) is avoided the same way. Burn-in writes ASS with per-event alignment and goes through ffmpeg-skill `caption --ass`; a soft track gets `{\an8}` on the moved cues. Each move is recorded with the face box that caused it. 参考：OpenChatCut（考え方のみ。コードは使わない）
   - Needs: detection-skill step 3 (faces); step 9 there for reframed output
   - Done when: a fixture with a face low in frame for 2-5 s moves only the cues in that span to the top, and qc-skill text legibility (its step 7) still passes on the burned frames
+- [ ] **9. TTML / IMSC 1.1 and EBU-TT-D output** — `generate` and `translate` write TTML (IMSC 1.1 Text Profile) and EBU-TT-D besides SRT / VTT, with WebVTT cue positions and region kept where the format can carry them; each output validated against its schema. Field review 2026-11-05 (Velisa ROADMAP, third round)
+  - なぜ要るか：放送局・配信プラットフォーム・海外の配給先が求める字幕形式をそのまま納品できる
+  - Done when: a ja/en fixture round-trips SRT → TTML → SRT with the same cues; the TTML validates
+- [ ] **10. Japanese broadcast-style captions** — a `ja-broadcast` profile: speaker colours, ruby (furigana) on given words, vertical text for burn-in, line and character limits as stated in the profile; in TTML ruby and vertical text are written with their IMSC attributes. ARIB STD-B24 / B36 binary caption streams are out of scope here (a proposal, Velisa ROADMAP)
+  - なぜ要るか：日本の放送・配信で慣れた見え方（話者色、ルビ、縦書き）の字幕を出せる
+  - Done when: a fixture with two speakers and one ruby word burns in with the stated colours and ruby, and the TTML carries both
+- [ ] **11. Live and rolling captions** — accept a growing transcript (transcription-skill streaming mode) and emit roll-up cues with a stated latency budget; after the event the same cue ids are replaced by the corrected transcript for the archive
+  - なぜ要るか：ハイブリッド配信のライブ字幕と、アーカイブ用の確定字幕を同じ流れで作れる
+  - Needs: transcription-skill streaming mode
+  - Done when: a fixture fed in 5 s windows emits cues within the budget, and the archive pass keeps the ids
+- [ ] **12. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
+  - なぜ要るか：縦型の切り出しに、読みやすい大きな字幕を自動で載せられる
+  - Done when: a 9:16 fixture's cues sit inside the TikTok / Shorts safe zone and never exceed two words
 
 ## Boundaries
 
