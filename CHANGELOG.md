@@ -1,3 +1,7 @@
+## v0.4.2 - 2026-11-05
+
+- docs(roadmap): step 8 (captions placed away from faces) and review (#27) (dc9c795)
+
 ## v0.4.1 - 2026-10-31
 
 - ci: check ffmpeg-skill v3.0.0 alongside main in the compatibility workflow (#26) (ded29c8)
