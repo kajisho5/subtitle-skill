@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/duration validation) and `render` (burn or mux, SRT). 106 tests, CI on 3 OSes x 2 Pythons.
+0.4.1, version single-sourced from `pyproject.toml` (step 1). `generate` (SRT/VTT with line/cps/duration validation), `render` (burn or mux, SRT), `translate` and `mux` (steps 5-6). 106 tests, CI on 3 OSes x 2 Pythons.
 
 ## What this repository owns
 
@@ -20,7 +20,7 @@ pyproject 0.1.2 but `__version__` 0.1.0. `generate` (SRT/VTT with line/cps/durat
 
 ## Wiring
 
-Agent wires generate and render (burn); render's mux mode, audio_stream, translate and mux are not wired (translate/mux change the contract's operations: the agent must re-pin). Delegates to ffmpeg-skill caption, probe.
+Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.4.1 (video-production-agent#102). Not wired: audio_stream, `translate` and the multi-language `mux` operation (dubbing-skill step 11 needs translate). Delegates to ffmpeg-skill caption, probe.
 
 ## Steps
 
@@ -38,10 +38,13 @@ Agent wires generate and render (burn); render's mux mode, audio_stream, transla
   - Done when: 2-language integration test
 - [x] **7. English-facing engines: Argos weight licence + commercial-safe ja→en** — the Argos ja→en package's own `metadata.json`/README state no licence (unverified, ADR-004 addendum); optional `opus-mt` (Helsinki-NLP OPUS-MT on CTranslate2, Apache-2.0 weights) and `ollama` (local Qwen3 via Ollama's HTTP API) engines, `argos` stays the default, `doctor` reports each engine's weight licence ([#25](https://github.com/kajisho5/subtitle-skill/pull/25))
   - Done when: both engines tested with mocks, no model downloaded in CI
+- [ ] **8. Captions placed away from faces** — given detection-skill face boxes (`detections@1`, or the reframe path of its step 9 after a crop), each cue moves from the bottom to the top safe area while a face overlaps the bottom caption box. One move per cue, never mid-cue; a minimum hold so captions do not jump between neighbouring cues; a fixed region the caller names (a sign-language window, a lower third) is avoided the same way. Burn-in writes ASS with per-event alignment and goes through ffmpeg-skill `caption --ass`; a soft track gets `{\an8}` on the moved cues. Each move is recorded with the face box that caused it. 参考：OpenChatCut（考え方のみ。コードは使わない）
+  - Needs: detection-skill step 3 (faces); step 9 there for reframed output
+  - Done when: a fixture with a face low in frame for 2-5 s moves only the cues in that span to the top, and qc-skill text legibility (its step 7) still passes on the burned frames
 
 ## Boundaries
 
-Animated captions also exist in remotion (Captioned/Karaoke); transcription exports SRT/VTT as views. dubbing depends on translation.
+Animated captions also exist in remotion (Captioned/Karaoke); transcription exports SRT/VTT as views. dubbing-skill takes translated cues from `translate` (its step 11).
 
 ---
-Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (42 tools, treated as complete). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
+Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
