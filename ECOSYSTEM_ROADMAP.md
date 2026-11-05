@@ -47,11 +47,7 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
 - [ ] **10. Regional caption profiles (broadcast conventions)** — caption conventions as opt-in regional profiles beside the international defaults (EBU-TT-D, IMSC 1.1): speaker colours, line and character limits per language, and for scripts that use them, ruby and vertical text for burn-in and in TTML with their IMSC attributes. The first regional profile is `ja-broadcast` (Japanese broadcast conventions); others are added the same way. ARIB STD-B24 / B36 binary caption streams are not made: ffmpeg-skill declined them because FFmpeg has no ARIB writer ([ffmpeg-skill#426](https://github.com/kajisho5/ffmpeg-skill/issues/426)), and the TTML of step 9 is the replacement
   - Why: broadcasters and platforms in each region get the caption look they expect, without changing the defaults for everyone else（なぜ要るか：地域ごとの放送の字幕慣習に、既定を変えずに合わせられる）
   - Done when: a fixture with two speakers and one ruby word burns in with the `ja-broadcast` profile's colours and ruby, the TTML carries both, and the same fixture without a profile uses the international defaults
-- [ ] **11. Live and rolling captions** — accept a growing transcript (transcription-skill streaming mode) and emit roll-up cues with a stated latency budget; after the event the same cue ids are replaced by the corrected transcript for the archive
-  - なぜ要るか：ハイブリッド配信のライブ字幕と、アーカイブ用の確定字幕を同じ流れで作れる
-  - Needs: transcription-skill streaming mode
-  - Done when: a fixture fed in 5 s windows emits cues within the budget, and the archive pass keeps the ids
-- [ ] **12. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
+- [ ] **11. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
   - なぜ要るか：縦型の切り出しに、読みやすい大きな字幕を自動で載せられる
   - Done when: a 9:16 fixture's cues sit inside the TikTok / Shorts safe zone and never exceed two words
 
