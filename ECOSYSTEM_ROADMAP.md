@@ -20,7 +20,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Wiring
 
-Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (#111). Pinned at 0.4.1 (#102). Not wired: audio_stream, `translate` and the multi-language `mux` operation (dubbing-skill step 11 needs translate). Delegates to ffmpeg-skill caption, probe.
+Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.4.1 (video-production-agent#102). Not wired: audio_stream, `translate` and the multi-language `mux` operation (dubbing-skill step 11 needs translate). Delegates to ffmpeg-skill caption, probe.
 
 ## Steps
 
