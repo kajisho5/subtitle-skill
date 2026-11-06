@@ -13,7 +13,7 @@ from .errors import SubtitleSkillError
 
 #: style is an allowlisted, typed set of fields -- never free-form.
 ALLOWED_STYLE_KEYS = frozenset(
-    {"align", "position", "line", "size", "bold", "italic", "color"}
+    {"align", "position", "line", "size", "bold", "italic", "color", "vertical"}
 )
 ALLOWED_ALIGN = frozenset({"left", "center", "right"})
 
@@ -32,6 +32,9 @@ class SubtitleStyle:
     bold: Optional[bool] = None
     italic: Optional[bool] = None
     color: Optional[str] = None
+    #: vertical text, top to bottom with lines right to left (TTML `tts:writingMode="tbrl"`);
+    #: for scripts that use it (ja/zh/ko). Roadmap step 10.
+    vertical: Optional[bool] = None
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> "SubtitleStyle":
@@ -47,10 +50,47 @@ class SubtitleStyle:
                 "INVALID_INPUT",
                 f"style.align must be one of {sorted(ALLOWED_ALIGN)}",
             )
+        for flag in ("bold", "italic", "vertical"):
+            if data.get(flag) is not None:
+                _require(isinstance(data[flag], bool), "INVALID_INPUT", f"style.{flag} must be true or false")
         return SubtitleStyle(**{k: data.get(k) for k in ALLOWED_STYLE_KEYS})
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
+
+
+@dataclass(frozen=True)
+class RubyAnnotation:
+    """A reading over a run of the cue text (furigana for Japanese): `base` is the
+    annotated text as it occurs in the cue, `text` the reading drawn above it."""
+
+    base: str
+    text: str
+
+    def to_dict(self) -> dict:
+        return {"base": self.base, "text": self.text}
+
+
+def _parse_ruby(raw: Any, cue_id: str, text: str) -> tuple:
+    _require(isinstance(raw, list) and raw, "INVALID_INPUT", f"cue {cue_id}: ruby must be a non-empty array")
+    out = []
+    cursor = 0
+    for i, item in enumerate(raw):
+        _require(isinstance(item, Mapping), "INVALID_INPUT", f"cue {cue_id}: ruby[{i}] must be an object")
+        unknown = set(item) - {"base", "text"}
+        _require(not unknown, "INVALID_INPUT", f"cue {cue_id}: ruby[{i}] unknown field(s) {sorted(unknown)}")
+        base, reading = item.get("base"), item.get("text")
+        for name, value in (("base", base), ("text", reading)):
+            _require(
+                isinstance(value, str) and value.strip() != "" and "\n" not in value,
+                "INVALID_INPUT",
+                f"cue {cue_id}: ruby[{i}].{name} must be a non-empty single-line string",
+            )
+        at = text.find(base, cursor)
+        _require(at >= 0, "INVALID_INPUT", f"cue {cue_id}: ruby[{i}].base {base!r} is not in the text (in order)")
+        cursor = at + len(base)
+        out.append(RubyAnnotation(base, reading))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -62,6 +102,9 @@ class SubtitleCue:
     speaker: Optional[str] = None
     style: Optional[SubtitleStyle] = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    #: ruby annotations, in text order (roadmap step 10); each base matches the
+    #: first occurrence after the previous one
+    ruby: tuple = ()
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> "SubtitleCue":
@@ -117,8 +160,9 @@ class SubtitleCue:
             isinstance(metadata, Mapping), "INVALID_INPUT", f"cue {cue_id}: metadata must be an object"
         )
 
-        unknown = set(data) - {"id", "start", "end", "text", "speaker", "style", "metadata"}
+        unknown = set(data) - {"id", "start", "end", "text", "speaker", "style", "metadata", "ruby"}
         _require(not unknown, "INVALID_INPUT", f"cue {cue_id}: unknown field(s) {sorted(unknown)}")
+        ruby = _parse_ruby(data["ruby"], cue_id, text) if data.get("ruby") is not None else ()
 
         return SubtitleCue(
             id=cue_id,
@@ -128,11 +172,26 @@ class SubtitleCue:
             speaker=speaker,
             style=style,
             metadata=dict(metadata),
+            ruby=ruby,
         )
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    def ruby_segments(self) -> list:
+        """The text as [(segment, reading or None)], split at the ruby bases."""
+        segments = []
+        cursor = 0
+        for annotation in self.ruby:
+            at = self.text.find(annotation.base, cursor)
+            if at > cursor:
+                segments.append((self.text[cursor:at], None))
+            segments.append((annotation.base, annotation.text))
+            cursor = at + len(annotation.base)
+        if cursor < len(self.text) or not segments:
+            segments.append((self.text[cursor:], None))
+        return segments
 
     def to_dict(self) -> dict:
         d: dict = {"id": self.id, "start": self.start, "end": self.end, "text": self.text}
@@ -142,6 +201,8 @@ class SubtitleCue:
             d["style"] = self.style.to_dict()
         if self.metadata:
             d["metadata"] = dict(self.metadata)
+        if self.ruby:
+            d["ruby"] = [r.to_dict() for r in self.ruby]
         return d
 
 

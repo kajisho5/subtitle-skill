@@ -22,6 +22,10 @@ WebVTT, TTML can carry colour. A cue with none of these uses the bottom region
 profile with the standard library only (it runs on every output);
 `tests/test_ttml.py` additionally validates against the W3C TTML2 XML Schema.
 `parse_ttml` reads either profile back into a `SubtitleDocument`.
+
+Ruby (roadmap step 10) is IMSC 1.1 ruby in `ttml` and the reading in brackets
+after its base in `ebu-tt-d`, which has none. A vertical cue (`style.vertical`)
+gets a region at the right edge with `tts:writingMode="tbrl"`.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 from ..errors import SubtitleSkillError
 from ..models import SubtitleCue, SubtitleDocument, SubtitleStyle
+from ._text import display_segments, ruby_as_text
 
 NS_TT = "http://www.w3.org/ns/ttml"
 NS_TTP = "http://www.w3.org/ns/ttml#parameter"
@@ -99,13 +104,19 @@ def _color(value: str) -> str:
     return "#" + m.group(1).lower()
 
 
+#: a vertical cue's region: a column band at the right edge (lines run right to left)
+_VERTICAL_REGION = (80.0, 10.0, 15.0, 80.0, "before", "tbrl")
+
+
 def _region_for(style: Optional[SubtitleStyle]) -> tuple:
-    """(origin x, origin y, extent w, extent h, displayAlign) in percent."""
+    """(origin x, origin y, extent w, extent h, displayAlign, writingMode) in percent."""
     x, y = _DEFAULT_ORIGIN
     w, h = _DEFAULT_EXTENT
     display = "after"
     if style is None:
-        return (x, y, w, h, display)
+        return (x, y, w, h, display, "lrtb")
+    if style.vertical:
+        return _VERTICAL_REGION
     if style.size is not None:
         w = max(1.0, min(100.0, float(style.size)))
     if style.position is not None:
@@ -117,18 +128,11 @@ def _region_for(style: Optional[SubtitleStyle]) -> tuple:
         y = max(0.0, min(99.0, float(style.line)))
         h = 100.0 - y
         display = "before"
-    return (x, y, w, h, display)
+    return (x, y, w, h, display, "lrtb")
 
 
 def _text_align(style: Optional[SubtitleStyle]) -> str:
     return style.align if style is not None and style.align is not None else "center"
-
-
-def _cue_lines(cue: SubtitleCue) -> list:
-    lines = cue.text.split("\n")
-    if cue.speaker:
-        lines[0] = f"{cue.speaker}: {lines[0]}"
-    return lines
 
 
 def _span_style(cue: SubtitleCue) -> tuple:
@@ -140,10 +144,27 @@ def _span_style(cue: SubtitleCue) -> tuple:
     return (bool(style.bold), bool(style.italic), _color(style.color) if style.color is not None else None)
 
 
-def _span(cue: SubtitleCue, style_id: Optional[str]) -> str:
-    inner = "<br/>".join(escape(line) for line in _cue_lines(cue))
+def _lines(text: str) -> str:
+    return "<br/>".join(escape(line) for line in text.split("\n"))
+
+
+def _span(cue: SubtitleCue, style_id: Optional[str], *, profile: str, language: str) -> str:
+    """The cue's content span. Ruby is IMSC 1.1 ruby (`tts:ruby` container / base /
+    text spans) in `ttml`; EBU-TT-D has no ruby, so the reading is written in
+    brackets after its base there (as in SRT)."""
+    parts = []
+    for segment, reading in display_segments(cue):
+        if reading is None:
+            parts.append(_lines(segment))
+        elif profile == "ttml":
+            parts.append(
+                '<span tts:ruby="container"><span tts:ruby="base">' + escape(segment)
+                + '</span><span tts:ruby="text">' + escape(reading) + "</span></span>"
+            )
+        else:
+            parts.append(escape(ruby_as_text(segment, reading, language)))
     open_tag = f'<span style="{style_id}">' if style_id else "<span>"
-    return f"{open_tag}{inner}</span>"
+    return f"{open_tag}{''.join(parts)}</span>"
 
 
 def _span_style_attrs(key: tuple) -> str:
@@ -181,7 +202,8 @@ def generate_ttml(document: SubtitleDocument, *, profile: str = "ttml") -> str:
             span_id = span_styles.setdefault(span_key, f"s_span{len(span_styles) + 1}")
         rows.append(
             f'      <p xml:id="{encode_id(cue.id)}" begin="{_clock(cue.start)}" end="{_clock(cue.end)}" '
-            f'region="{region_id}" style="s_base {style_id}">{_span(cue, span_id)}</p>'
+            f'region="{region_id}" style="s_base {style_id}">'
+            f"{_span(cue, span_id, profile=profile, language=document.language)}</p>"
         )
     if not regions:
         regions[_region_for(None)] = "bottom"
@@ -219,10 +241,11 @@ def generate_ttml(document: SubtitleDocument, *, profile: str = "ttml") -> str:
     out.append("    </styling>")
     out.append("    <layout>")
     for geometry, region_id in sorted(regions.items(), key=lambda kv: kv[1]):
-        x, y, w, h, display = geometry
+        x, y, w, h, display, writing = geometry
+        writing_attr = f' tts:writingMode="{writing}"' if writing != "lrtb" else ""
         out.append(
             f'      <region xml:id="{region_id}" tts:origin="{_pct(x)} {_pct(y)}" '
-            f'tts:extent="{_pct(w)} {_pct(h)}" tts:displayAlign="{display}" tts:overflow="visible"/>'
+            f'tts:extent="{_pct(w)} {_pct(h)}" tts:displayAlign="{display}"{writing_attr} tts:overflow="visible"/>'
         )
     out.append("    </layout>")
     out.append("  </head>")
@@ -332,6 +355,8 @@ def validate_ttml(text: str, *, profile: str) -> list:
             for sid in (span.get("style") or "").split():
                 if sid not in style_ids:
                     problems.append(f"p {pid!r}: span style {sid!r} is not defined")
+        if profile == "ebu-tt-d" and any(sp.get(_q(NS_TTS, "ruby")) for sp in p.iter(_q(NS_TT, "span"))):
+            problems.append(f"p {pid!r}: EBU-TT-D has no ruby")
         if profile == "ebu-tt-d":
             for el in [p, *p.iter(_q(NS_TT, "span"))]:
                 if any(k.startswith("{" + NS_TTS + "}") for k in el.attrib):
@@ -353,13 +378,21 @@ def check_ttml(text: str, *, profile: str) -> None:
 # ------------------------------------------------------------------- reading
 
 
-def _text_of(el: ET.Element) -> str:
+def _text_of(el: ET.Element, ruby: Optional[list] = None) -> str:
+    """Text of `el`, with `br` as newlines; IMSC ruby containers contribute their
+    base to the text and (base, reading) to `ruby`."""
     parts = [el.text or ""]
     for child in el:
         if child.tag == _q(NS_TT, "br"):
             parts.append("\n")
+        elif child.tag == _q(NS_TT, "span") and child.get(_q(NS_TTS, "ruby")) == "container":
+            base = "".join(_text_of(c) for c in child if c.get(_q(NS_TTS, "ruby")) == "base")
+            reading = "".join(_text_of(c) for c in child if c.get(_q(NS_TTS, "ruby")) == "text")
+            parts.append(base)
+            if ruby is not None:
+                ruby.append({"base": base, "text": reading})
         elif child.tag == _q(NS_TT, "span"):
-            parts.append(_text_of(child))
+            parts.append(_text_of(child, ruby))
         parts.append(child.tail or "")
     return "".join(parts)
 
@@ -381,6 +414,7 @@ def parse_ttml(text: str, *, document_id: str = "ttml") -> SubtitleDocument:
             regions[region.get(_q(NS_XML, "id"))] = (
                 float(mo.group(1)), float(mo.group(2)), float(me.group(1)), float(me.group(2)),
                 region.get(_q(NS_TTS, "displayAlign")) or "before",
+                region.get(_q(NS_TTS, "writingMode")) or "lrtb",
             )
     named = {s.get(_q(NS_XML, "id")): s for s in root.iter(_q(NS_TT, "style"))}
     aligns = {sid: el.get(_q(NS_TTS, "textAlign")) for sid, el in named.items()}
@@ -397,8 +431,10 @@ def parse_ttml(text: str, *, document_id: str = "ttml") -> SubtitleDocument:
     for index, p in enumerate(root.iter(_q(NS_TT, "p")), start=1):
         style = {}
         geometry = regions.get(p.get("region"))
-        if geometry is not None and geometry != _region_for(None):
-            x, y, w, h, display = geometry
+        if geometry is not None and geometry[5] in ("tbrl", "tb"):
+            style["vertical"] = True
+        elif geometry is not None and geometry != _region_for(None):
+            x, y, w, h, display, _writing = geometry
             if display == "before":
                 style["line"] = y
             if (x, w) != (_DEFAULT_ORIGIN[0], _DEFAULT_EXTENT[0]):
@@ -416,13 +452,16 @@ def parse_ttml(text: str, *, document_id: str = "ttml") -> SubtitleDocument:
                 style["italic"] = True
             if styled(span, "color") is not None:
                 style["color"] = styled(span, "color").lstrip("#").upper()[:6]
+        ruby: list = []
         cue = {
             "id": decode_id(p.get(_q(NS_XML, "id")) or str(index)),
             "start": _parse_clock(p.get("begin", "")),
             "end": _parse_clock(p.get("end", "")),
-            "text": _text_of(p).strip("\n"),
+            "text": _text_of(p, ruby).strip("\n"),
         }
         if style:
             cue["style"] = style
+        if ruby:
+            cue["ruby"] = ruby
         cues.append(cue)
     return SubtitleDocument.from_dict({"id": document_id, "language": language, "cues": cues})

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ..errors import SubtitleSkillError
 from ..models import SubtitleDocument, SubtitleCue
+from ._text import display_segments
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -35,15 +36,21 @@ def _cue_settings(cue: SubtitleCue) -> str:
         parts.append(f"line:{cue.style.line:g}%")
     if cue.style.size is not None:
         parts.append(f"size:{cue.style.size:g}%")
+    if cue.style.vertical:
+        parts.append("vertical:rl")
     return (" " + " ".join(parts)) if parts else ""
 
 
+def _escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _escape_text(cue: SubtitleCue) -> str:
-    lines = cue.text.split("\n")
-    if cue.speaker:
-        lines[0] = f"{cue.speaker}: {lines[0]}"
-    text = "\n".join(lines)
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # WebVTT has ruby: <ruby>base<rt>reading</rt></ruby>
+    text = "".join(
+        _escape(seg) if reading is None else f"<ruby>{_escape(seg)}<rt>{_escape(reading)}</rt></ruby>"
+        for seg, reading in display_segments(cue)
+    )
     if cue.style is not None:
         if cue.style.bold:
             text = f"<b>{text}</b>"

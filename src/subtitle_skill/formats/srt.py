@@ -14,8 +14,9 @@ from typing import FrozenSet
 
 from ..errors import SubtitleSkillError
 from ..models import SubtitleDocument, SubtitleCue
+from ._text import plain_text
 
-_UNSUPPORTED_STYLE_FIELDS = ("align", "position", "line", "size", "color")
+_UNSUPPORTED_STYLE_FIELDS = ("align", "position", "line", "size", "color", "vertical")
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -26,11 +27,9 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-def _escape_text(cue: SubtitleCue, *, allow_style_fields: FrozenSet[str] = frozenset()) -> str:
-    lines = cue.text.split("\n")
-    if cue.speaker:
-        lines[0] = f"{cue.speaker}: {lines[0]}"
-    text = "\n".join(lines)
+def _escape_text(cue: SubtitleCue, *, allow_style_fields: FrozenSet[str] = frozenset(), language: str = "und") -> str:
+    # SRT has no ruby: a reading is written in brackets after its base (formats._text)
+    text = plain_text(cue, language)
 
     if cue.style is not None:
         unsupported = [
@@ -87,7 +86,7 @@ def generate_srt(
                     str(index),
                     f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}",
                     ("{\\an8}" if cue.id in top_cue_ids else "")
-                    + _escape_text(cue, allow_style_fields=allow_style_fields),
+                    + _escape_text(cue, allow_style_fields=allow_style_fields, language=document.language),
                     "",
                 ]
             )

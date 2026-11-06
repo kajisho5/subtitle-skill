@@ -13,10 +13,12 @@ gets `{\\an8}` (per-event alignment, top centre).
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Mapping, Optional
 
 from ..errors import SubtitleSkillError
 from ..models import SubtitleCue, SubtitleDocument, SubtitleStyle
+from ._text import display_segments
 
 SCRIPT_HEIGHT = 288.0
 DEFAULT_SIZE_POINTS = 24.0
@@ -69,17 +71,80 @@ def _scaled(points: float, height: int) -> int:
     return max(1, round(points * height / SCRIPT_HEIGHT))
 
 
-def _cue_body(cue: SubtitleCue) -> str:
-    lines = cue.text.split("\n")
-    if cue.speaker:
-        lines[0] = f"{cue.speaker}: {lines[0]}"
-    body = escape_text("\n".join(lines))
+def _overrides(cue: SubtitleCue) -> str:
+    """Per-event style: bold/italic and a cue's own colour (a regional profile's
+    speaker colour arrives as one)."""
+    tags = ""
     if cue.style is not None:
         if cue.style.bold:
-            body = "{\\b1}" + body
+            tags += "\\b1"
         if cue.style.italic:
-            body = "{\\i1}" + body
-    return body
+            tags += "\\i1"
+        if cue.style.color is not None:
+            tags += f"\\c{ass_color(cue.style.color)[:2]}{ass_color(cue.style.color)[4:]}&"
+    return tags
+
+
+def _cue_body(cue: SubtitleCue) -> str:
+    body = escape_text("".join(seg for seg, _reading in display_segments(cue)))
+    tags = _overrides(cue)
+    return ("{" + tags + "}" if tags else "") + body
+
+
+#: libass sizes a font by its ascent + descent; Noto Sans CJK's is 1.448 em, so one
+#: full-width character advances about 0.69 x Fontsize (measured on a libass burn:
+#: ten 国 at Fontsize 60 draw 407 px wide). Half-width characters are taken as half that.
+CJK_EM_PER_FONTSIZE = 1 / 1.448
+RUBY_SCALE = 0.5
+LINE_ADVANCE = 1.25
+
+
+def _advance(text: str, font_size: float) -> float:
+    em = font_size * CJK_EM_PER_FONTSIZE
+    return sum(em if unicodedata.east_asian_width(ch) in ("W", "F") else em * 0.5 for ch in text)
+
+
+def _ruby_events(cue: SubtitleCue, *, start: str, end: str, position: str, width: int, height: int,
+                 font_size: int, margin_v: int) -> list:
+    """A cue with ruby, laid out by subtitle-skill: one event per line at a fixed
+    `\\pos` (bottom centre of the line), and one smaller event per reading centred
+    over its base. libass has no ruby; the base's x is estimated from the
+    characters' East Asian Width (CJK_EM_PER_FONTSIZE), so a reading can sit a few
+    pixels off over proportional Latin text."""
+    lines: list = [[]]
+    for segment, reading in display_segments(cue):
+        parts = segment.split("\n") if reading is None else [segment]
+        for i, part in enumerate(parts):
+            if i:
+                lines.append([])
+            if part:
+                lines[-1].append((part, reading))
+    ruby_size = max(1, round(font_size * RUBY_SCALE))
+    pitch = font_size * LINE_ADVANCE + ruby_size
+    tags = _overrides(cue)
+    cx = width / 2.0
+    events = []
+    n = len(lines)
+    for k, line in enumerate(lines):
+        if position == "top":
+            y = margin_v + ruby_size + font_size * LINE_ADVANCE + k * pitch
+        else:
+            y = height - margin_v - (n - 1 - k) * pitch
+        text = "".join(seg for seg, _r in line)
+        events.append(
+            f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\an2\\pos({cx:.0f},{y:.0f}){tags}}}{escape_text(text)}"
+        )
+        x = cx - _advance(text, font_size) / 2.0
+        for seg, reading in line:
+            seg_w = _advance(seg, font_size)
+            if reading is not None:
+                rx, ry = x + seg_w / 2.0, y - font_size * 0.95
+                events.append(
+                    f"Dialogue: 1,{start},{end},Default,,0,0,0,,"
+                    f"{{\\an2\\pos({rx:.0f},{ry:.0f})\\fs{ruby_size}{tags}}}{escape_text(reading)}"
+                )
+            x += seg_w
+    return events
 
 
 def generate_ass(
@@ -138,8 +203,15 @@ def generate_ass(
         position = positions.get(cue.id, "bottom")
         if position not in ("bottom", "top"):
             raise SubtitleSkillError("INVALID_INPUT", f"cue {cue.id}: unknown position {position!r}")
+        if cue.style is not None and cue.style.vertical:
+            raise SubtitleSkillError(
+                "UNSUPPORTED_FORMAT", f"cue {cue.id}: vertical text is written to TTML/WebVTT, not burned in"
+            )
+        start, end = _timestamp(cue.start), _timestamp(cue.end)
+        if cue.ruby:
+            events.extend(_ruby_events(cue, start=start, end=end, position=position, width=width,
+                                       height=height, font_size=font_size, margin_v=margin_v))
+            continue
         prefix = "{\\an8}" if position == "top" else ""
-        events.append(
-            f"Dialogue: 0,{_timestamp(cue.start)},{_timestamp(cue.end)},Default,,0,0,0,,{prefix}{_cue_body(cue)}"
-        )
+        events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue)}")
     return "\n".join(header + events) + "\n"
