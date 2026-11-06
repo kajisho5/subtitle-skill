@@ -41,6 +41,15 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
 - [ ] **8. Captions placed away from faces** — given detection-skill face boxes (`detections@1`, or the reframe path of its step 9 after a crop), each cue moves from the bottom to the top safe area while a face overlaps the bottom caption box. One move per cue, never mid-cue; a minimum hold so captions do not jump between neighbouring cues; a fixed region the caller names (a sign-language window, a lower third) is avoided the same way. Burn-in writes ASS with per-event alignment and goes through ffmpeg-skill `caption --ass`; a soft track gets `{\an8}` on the moved cues. Each move is recorded with the face box that caused it. 参考：OpenChatCut（考え方のみ。コードは使わない）
   - Needs: detection-skill step 3 (faces); step 9 there for reframed output
   - Done when: a fixture with a face low in frame for 2-5 s moves only the cues in that span to the top, and qc-skill text legibility (its step 7) still passes on the burned frames
+- [ ] **9. TTML / IMSC 1.1 and EBU-TT-D output** — `generate` and `translate` write TTML (IMSC 1.1 Text Profile) and EBU-TT-D besides SRT / VTT, with WebVTT cue positions and region kept where the format can carry them; each output validated against its schema. Field review 2026-11-05 (Velisa ROADMAP, third round)
+  - なぜ要るか：放送局・配信プラットフォーム・海外の配給先が求める字幕形式をそのまま納品できる
+  - Done when: a ja/en fixture round-trips SRT → TTML → SRT with the same cues; the TTML validates
+- [ ] **10. Regional caption profiles (broadcast conventions)** — caption conventions as opt-in regional profiles beside the international defaults (EBU-TT-D, IMSC 1.1): speaker colours, line and character limits per language, and for scripts that use them, ruby and vertical text for burn-in and in TTML with their IMSC attributes. The first regional profile is `ja-broadcast` (Japanese broadcast conventions); others are added the same way. ARIB STD-B24 / B36 binary caption streams are not made: ffmpeg-skill declined them because FFmpeg has no ARIB writer ([ffmpeg-skill#426](https://github.com/kajisho5/ffmpeg-skill/issues/426)), and the TTML of step 9 is the replacement
+  - Why: broadcasters and platforms in each region get the caption look they expect, without changing the defaults for everyone else（なぜ要るか：地域ごとの放送の字幕慣習に、既定を変えずに合わせられる）
+  - Done when: a fixture with two speakers and one ruby word burns in with the `ja-broadcast` profile's colours and ruby, the TTML carries both, and the same fixture without a profile uses the international defaults
+- [ ] **11. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
+  - なぜ要るか：縦型の切り出しに、読みやすい大きな字幕を自動で載せられる
+  - Done when: a 9:16 fixture's cues sit inside the TikTok / Shorts safe zone and never exceed two words
 
 ## Boundaries
 
