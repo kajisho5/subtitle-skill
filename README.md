@@ -199,7 +199,7 @@ These are the rules the code enforces — not aspirations.
 ## Operations
 
 Four operations exist. All appear in `contract --json`; nothing else
-does — `convert`, `offset`, `merge`, and ASS/SSA are not implemented and
+does — `convert`, `offset`, `merge`, and ASS/SSA output are not implemented and
 cannot be called.
 
 | Operation | Video I/O | Formats | What it does |
@@ -214,6 +214,23 @@ cannot be called.
 `--mode`/`--audio-stream` flags — see
 [ffmpeg-skill integration](#ffmpeg-skill-integration) for exactly what
 each does and `subtitle.language`'s forwarding as the mux language tag.
+
+### Captions placed away from faces (`render` `placement`)
+
+`render` takes an optional `placement` ([ADR-006](docs/adr/ADR-006-caption-placement.md)):
+detection-skill face boxes (`faces`: a `detections@1` document; `reframe`: its
+`reframe@1` crop when the video is that crop) and fixed regions the caller names
+(`avoid`: a sign-language window, a lower third). A cue moves from the bottom
+caption box to the top one, as a whole, while a face or an active region overlaps
+the bottom box; `min_hold` (default 1 s) keeps a short run of cues between two
+moved cues at the top too, so captions do not jump. The response's `placement`
+records every move and the box that caused it. A burn is written as ASS
+(caption.py's own default look, `{\an8}` on moved cues) and burned with
+`caption --ass`; a soft track (`mode: "mux"`) gets `{\an8}` on the moved cues.
+
+```json
+"placement": {"faces": "faces.json", "avoid": [{"name": "sign-language", "box": [0.7, 0.55, 0.28, 0.4]}], "min_hold": 1.0}
+```
 
 ### `translate`
 
@@ -639,7 +656,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope
@@ -654,7 +671,8 @@ cloud upload, MCP or plugin-loader integration, arbitrary FFmpeg command
 or filter execution.
 
 Not yet implemented, and not advertised in `contract --json`: `convert`,
-`offset`, `merge`, ASS/SSA generation or rendering.
+`offset`, `merge`, ASS/SSA as a `generate` format (`render` writes ASS internally
+only for `placement`).
 
 Translation (字幕翻訳) belongs to this skill in the AI Video Production OS
 (owner decision, 2026-10-30) and is the `translate` operation

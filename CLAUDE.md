@@ -237,6 +237,16 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Captions placed away from faces** (ECOSYSTEM_ROADMAP step 8,
+  `docs/adr/ADR-006-caption-placement.md`, `src/subtitle_skill/placement.py`,
+  `src/subtitle_skill/formats/ass.py`). `render` takes `placement` (`faces`:
+  detection-skill `detections@1`; `reframe`: `reframe@1`; `avoid`: named
+  regions; `min_hold`). With it a burn goes through subtitle-skill's own ASS
+  and `caption --ass` (caption.py's SRT force_style is one setting per burn);
+  `mode: "mux"` writes `{\an8}` into the SRT. Without it nothing changes.
+  **Contract changed** (`operations.render` inputs/outputs/`placement`,
+  `parameters.render`): video-production-agent must re-pin.
+
 - **Argos weight licence checked; `opus-mt` and `ollama` engines** (ECOSYSTEM_ROADMAP
   step 7, ADR-004 addendum). The ja→en `.argosmodel` was downloaded once,
   read and deleted: its `metadata.json` and README state no licence, so it

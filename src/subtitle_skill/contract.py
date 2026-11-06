@@ -6,6 +6,7 @@ from .doctor import RENDER_SUPPORTED_FORMATS
 from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS, MUX_CONTAINERS
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
+from .placement import DETECTIONS_SCHEMA, PLACEMENT_FIELDS, REFRAME_SCHEMA
 from .translation import DEFAULT_ENGINE, ENGINES
 
 OPERATIONS = ("generate", "render", "translate", "mux")
@@ -80,7 +81,15 @@ def build_contract() -> dict:
                     "caption.py's own `--color`/`--bold`/`--size` (a single, whole-burn setting, "
                     "so every cue that sets one of these fields must agree on its value); "
                     "`style.align`/`style.position`/`style.line`/`style.italic` have no "
-                    "caption.py equivalent and are never forwarded."
+                    "caption.py equivalent and are never forwarded. `placement` "
+                    "(docs/adr/ADR-006-caption-placement.md) moves a cue from the bottom to the top "
+                    "caption box while a face from a detection-skill `detections@1` document "
+                    "(`placement.faces`, optionally mapped through a `reframe@1` crop with "
+                    "`placement.reframe`) or a caller-named region (`placement.avoid`) overlaps the "
+                    "bottom box: one decision per cue, a `min_hold` so neighbouring cues do not jump, "
+                    "every move recorded with the box that caused it in the response's `placement`. "
+                    "A burn then goes through ffmpeg-skill `caption --ass` with per-event alignment; "
+                    "a soft track gets `{\\an8}` on the moved cues."
                 ),
                 "inputs": [
                     "video_input",
@@ -90,10 +99,17 @@ def build_contract() -> dict:
                     "constraints?",
                     "mode?",
                     "audio_stream?",
+                    "placement?",
                 ],
-                "outputs": ["output", "sha256", "size", "timeline", "observation", "engine", "mode"],
+                "outputs": ["output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?"],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
+                "placement": {
+                    "faces_schema": DETECTIONS_SCHEMA,
+                    "reframe_schema": REFRAME_SCHEMA,
+                    "fields": sorted(PLACEMENT_FIELDS),
+                    "positions": ["bottom", "top"],
+                },
             },
             "translate": {
                 "description": (
@@ -191,7 +207,7 @@ def build_contract() -> dict:
                 "reading_speed_cps",
             ],
             "style": ["align", "position", "line", "size", "bold", "italic", "color"],
-            "render": ["mode", "audio_stream"],
+            "render": ["mode", "audio_stream", "placement"],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],
         },

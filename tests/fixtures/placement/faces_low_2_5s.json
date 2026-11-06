@@ -1,0 +1,603 @@
+{
+ "schema": "detection-skill/detections@1",
+ "kind": "face",
+ "source": {
+  "filename": "in.mp4",
+  "fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "size_bytes": 0,
+  "media_type": "video",
+  "duration": 10.0,
+  "width": 640,
+  "height": 360,
+  "fps": 25
+ },
+ "frame_size": {
+  "width": 640,
+  "height": 360
+ },
+ "sampling": {
+  "method": "every",
+  "every": 0.5,
+  "times": [
+   0.0,
+   0.5,
+   1.0,
+   1.5,
+   2.0,
+   2.5,
+   3.0,
+   3.5,
+   4.0,
+   4.5,
+   5.0,
+   5.5,
+   6.0,
+   6.5,
+   7.0,
+   7.5,
+   8.0,
+   8.5,
+   9.0,
+   9.5
+  ],
+  "frames_tool": "ffmpeg-skill/look"
+ },
+ "engine": {
+  "id": "yunet",
+  "kind": "face"
+ },
+ "parameters": {
+  "min_score": 0.6
+ },
+ "frames": [
+  {
+   "index": 0,
+   "t": 0.0,
+   "detections": [
+    {
+     "t": 0.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 1,
+   "t": 0.5,
+   "detections": [
+    {
+     "t": 0.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 2,
+   "t": 1.0,
+   "detections": [
+    {
+     "t": 1.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 3,
+   "t": 1.5,
+   "detections": [
+    {
+     "t": 1.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 4,
+   "t": 2.0,
+   "detections": [
+    {
+     "t": 2.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 5,
+   "t": 2.5,
+   "detections": [
+    {
+     "t": 2.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 6,
+   "t": 3.0,
+   "detections": [
+    {
+     "t": 3.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 7,
+   "t": 3.5,
+   "detections": [
+    {
+     "t": 3.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 8,
+   "t": 4.0,
+   "detections": [
+    {
+     "t": 4.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 9,
+   "t": 4.5,
+   "detections": [
+    {
+     "t": 4.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      250.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.69444,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 10,
+   "t": 5.0,
+   "detections": [
+    {
+     "t": 5.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 11,
+   "t": 5.5,
+   "detections": [
+    {
+     "t": 5.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 12,
+   "t": 6.0,
+   "detections": [
+    {
+     "t": 6.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 13,
+   "t": 6.5,
+   "detections": [
+    {
+     "t": 6.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 14,
+   "t": 7.0,
+   "detections": [
+    {
+     "t": 7.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 15,
+   "t": 7.5,
+   "detections": [
+    {
+     "t": 7.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 16,
+   "t": 8.0,
+   "detections": [
+    {
+     "t": 8.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 17,
+   "t": 8.5,
+   "detections": [
+    {
+     "t": 8.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 18,
+   "t": 9.0,
+   "detections": [
+    {
+     "t": 9.0,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  },
+  {
+   "index": 19,
+   "t": 9.5,
+   "detections": [
+    {
+     "t": 9.5,
+     "kind": "face",
+     "box": [
+      260.0,
+      120.0,
+      120.0,
+      100.0
+     ],
+     "box_norm": [
+      0.40625,
+      0.33333,
+      0.1875,
+      0.27778
+     ],
+     "score": 0.93,
+     "label": null,
+     "engine": "yunet",
+     "model": "face_detection_yunet_2023mar.onnx",
+     "model_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+   ]
+  }
+ ],
+ "counts": {
+  "frames": 20,
+  "frames_with_detections": 20,
+  "detections": 20
+ },
+ "skill": "detection-skill",
+ "tool": "faces",
+ "warnings": [],
+ "note": "synthetic fixture for subtitle-skill roadmap step 8: one face box low in frame (overlapping the bottom caption box) from 2.0 to 4.5 s, samples every 0.5 s; mid-frame (clear of both caption boxes) otherwise"
+}
