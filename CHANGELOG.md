@@ -1,3 +1,7 @@
+## v0.8.0 - 2026-11-06
+
+- feat(render): shorts captions for vertical clips (roadmap step 11) (#32) (b243cf3)
+
 ## v0.7.0 - 2026-11-06
 
 - feat: regional caption profiles (ja-broadcast), ruby and vertical text (roadmap step 10) (#31) (a4676dc)
