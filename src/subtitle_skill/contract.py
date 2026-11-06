@@ -8,6 +8,10 @@ from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
 from .formats.ttml import EBU_TT_D_STANDARD, IMSC11_TEXT_PROFILE
 from .regional import PROFILES as REGIONAL_PROFILES
+from .shorts import FONT_HEIGHT as SHORTS_FONT_HEIGHT
+from .shorts import MAX_WORDS as SHORTS_MAX_WORDS
+from .shorts import PLATFORM_SAFE as SHORTS_PLATFORM_SAFE
+from .shorts import SAFE as SHORTS_SAFE
 from .placement import DETECTIONS_SCHEMA, PLACEMENT_FIELDS, REFRAME_SCHEMA
 from .translation import DEFAULT_ENGINE, ENGINES
 
@@ -104,7 +108,10 @@ def build_contract() -> dict:
                     "A burn then goes through ffmpeg-skill `caption --ass` with per-event alignment; "
                     "a soft track gets `{\\an8}` on the moved cues. `regional_profile` (burn: speaker "
                     "colours per cue) and cue `ruby` (drawn over its base) also burn through that ASS; "
-                    "`style.vertical` is not burned (UNSUPPORTED_FORMAT)."
+                    "`style.vertical` is not burned (UNSUPPORTED_FORMAT). `caption_profile: \"shorts\"` "
+                    "(docs/adr/ADR-009-shorts-captions.md; burn, vertical video) splits the cues into one- or "
+                    "two-word cues from `cue.words` and burns them in large type inside the safe zone shared "
+                    "by TikTok, YouTube Shorts and Instagram Reels, avoiding faces with `placement`."
                 ),
                 "inputs": [
                     "video_input",
@@ -116,10 +123,11 @@ def build_contract() -> dict:
                     "audio_stream?",
                     "placement?",
                     "regional_profile?",
+                    "caption_profile?",
                 ],
                 "outputs": [
                     "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
-                    "regional_profile?",
+                    "regional_profile?", "caption_profile?",
                 ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
@@ -216,6 +224,7 @@ def build_contract() -> dict:
             "translation_engines": list(ENGINES),
             "mux_containers": sorted(MUX_CONTAINERS),
             "regional_profiles": sorted(REGIONAL_PROFILES),
+            "caption_profiles": ["shorts"],
             "ruby": True,
             "path_policy": True,
             "provenance": True,
@@ -230,9 +239,18 @@ def build_contract() -> dict:
                 "reading_speed_cps",
             ],
             "style": ["align", "position", "line", "size", "bold", "italic", "color", "vertical"],
-            "cue": ["id", "start", "end", "text", "speaker", "style", "metadata", "ruby"],
+            "cue": ["id", "start", "end", "text", "speaker", "style", "metadata", "ruby", "words"],
+            "caption_profiles": {
+                "shorts": {
+                    "for": "render mode 'burn', vertical video, every cue with words",
+                    "max_words": SHORTS_MAX_WORDS,
+                    "safe_zone": dict(SHORTS_SAFE),
+                    "safe_zone_of": sorted(SHORTS_PLATFORM_SAFE),
+                    "font_height": SHORTS_FONT_HEIGHT,
+                },
+            },
             "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
-            "render": ["mode", "audio_stream", "placement"],
+            "render": ["mode", "audio_stream", "placement", "regional_profile", "caption_profile"],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],
         },

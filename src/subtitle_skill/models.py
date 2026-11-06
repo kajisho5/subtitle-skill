@@ -94,6 +94,47 @@ def _parse_ruby(raw: Any, cue_id: str, text: str) -> tuple:
 
 
 @dataclass(frozen=True)
+class WordTiming:
+    """One word (or token, for scripts without spaces) and when it is spoken, as
+    a transcription engine reports it. Read by the `shorts` caption profile."""
+
+    text: str
+    start: float
+    end: float
+
+    def to_dict(self) -> dict:
+        return {"text": self.text, "start": self.start, "end": self.end}
+
+
+def _parse_words(raw: Any, cue_id: str, start: float, end: float) -> tuple:
+    _require(isinstance(raw, list) and raw, "INVALID_INPUT", f"cue {cue_id}: words must be a non-empty array")
+    out = []
+    previous_end = start
+    for i, item in enumerate(raw):
+        _require(isinstance(item, Mapping), "INVALID_INPUT", f"cue {cue_id}: words[{i}] must be an object")
+        unknown = set(item) - {"text", "start", "end"}
+        _require(not unknown, "INVALID_INPUT", f"cue {cue_id}: words[{i}] unknown field(s) {sorted(unknown)}")
+        text = item.get("text")
+        _require(isinstance(text, str) and text.strip() != "" and "\n" not in text, "INVALID_INPUT",
+                 f"cue {cue_id}: words[{i}].text must be a non-empty single-line string")
+        times = []
+        for key in ("start", "end"):
+            value = item.get(key)
+            _require(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
+                     "INVALID_TIME_RANGE", f"cue {cue_id}: words[{i}].{key} must be a finite number")
+            times.append(float(value))
+        w_start, w_end = times
+        _require(w_end > w_start, "INVALID_TIME_RANGE", f"cue {cue_id}: words[{i}] end <= start")
+        _require(start - 1e-6 <= w_start and w_end <= end + 1e-6, "INVALID_TIME_RANGE",
+                 f"cue {cue_id}: words[{i}] lies outside the cue")
+        _require(w_start >= previous_end - 1e-6, "INVALID_TIME_RANGE",
+                 f"cue {cue_id}: words[{i}] starts before the previous word ends")
+        previous_end = w_end
+        out.append(WordTiming(text.strip(), w_start, w_end))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
 class SubtitleCue:
     id: str
     start: float  # seconds, inclusive
@@ -105,6 +146,8 @@ class SubtitleCue:
     #: ruby annotations, in text order (roadmap step 10); each base matches the
     #: first occurrence after the previous one
     ruby: tuple = ()
+    #: word timings inside the cue (roadmap step 11, the `shorts` caption profile)
+    words: tuple = ()
 
     @staticmethod
     def from_dict(data: Mapping[str, Any]) -> "SubtitleCue":
@@ -160,9 +203,10 @@ class SubtitleCue:
             isinstance(metadata, Mapping), "INVALID_INPUT", f"cue {cue_id}: metadata must be an object"
         )
 
-        unknown = set(data) - {"id", "start", "end", "text", "speaker", "style", "metadata", "ruby"}
+        unknown = set(data) - {"id", "start", "end", "text", "speaker", "style", "metadata", "ruby", "words"}
         _require(not unknown, "INVALID_INPUT", f"cue {cue_id}: unknown field(s) {sorted(unknown)}")
         ruby = _parse_ruby(data["ruby"], cue_id, text) if data.get("ruby") is not None else ()
+        words = _parse_words(data["words"], cue_id, start, end) if data.get("words") is not None else ()
 
         return SubtitleCue(
             id=cue_id,
@@ -173,6 +217,7 @@ class SubtitleCue:
             style=style,
             metadata=dict(metadata),
             ruby=ruby,
+            words=words,
         )
 
     @property
@@ -203,6 +248,8 @@ class SubtitleCue:
             d["metadata"] = dict(self.metadata)
         if self.ruby:
             d["ruby"] = [r.to_dict() for r in self.ruby]
+        if self.words:
+            d["words"] = [w.to_dict() for w in self.words]
         return d
 
 

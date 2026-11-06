@@ -1,0 +1,91 @@
+{
+ "id": "shorts-9x16",
+ "language": "en",
+ "cues": [
+  {
+   "id": "1",
+   "start": 0.0,
+   "end": 2.0,
+   "speaker": "Host",
+   "text": "Welcome back, everyone to the channel",
+   "words": [
+    {
+     "text": "Welcome",
+     "start": 0.0,
+     "end": 0.35
+    },
+    {
+     "text": "back,",
+     "start": 0.4,
+     "end": 0.7
+    },
+    {
+     "text": "everyone",
+     "start": 0.75,
+     "end": 1.2
+    },
+    {
+     "text": "to",
+     "start": 1.25,
+     "end": 1.35
+    },
+    {
+     "text": "the",
+     "start": 1.4,
+     "end": 1.5
+    },
+    {
+     "text": "channel",
+     "start": 1.55,
+     "end": 1.95
+    }
+   ]
+  },
+  {
+   "id": "2",
+   "start": 2.2,
+   "end": 4.0,
+   "text": "Today: unbelievably extraordinary results!",
+   "words": [
+    {
+     "text": "Today:",
+     "start": 2.2,
+     "end": 2.6
+    },
+    {
+     "text": "unbelievably",
+     "start": 2.7,
+     "end": 3.2
+    },
+    {
+     "text": "extraordinary",
+     "start": 3.25,
+     "end": 3.8
+    },
+    {
+     "text": "results!",
+     "start": 3.82,
+     "end": 3.98
+    }
+   ]
+  },
+  {
+   "id": "3",
+   "start": 4.2,
+   "end": 5.8,
+   "text": "Let's go",
+   "words": [
+    {
+     "text": "Let's",
+     "start": 4.2,
+     "end": 4.6
+    },
+    {
+     "text": "go",
+     "start": 4.7,
+     "end": 5.2
+    }
+   ]
+  }
+ ]
+}

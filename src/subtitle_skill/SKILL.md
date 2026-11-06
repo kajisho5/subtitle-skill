@@ -208,6 +208,16 @@ can omit `constraints` entirely.
     written as ASS with `{\an8}` on the moved cues and burned with
     `caption --ass`; `mode: "mux"` puts `{\an8}` in the soft track.
 
+  - `caption_profile: "shorts"` (optional, `mode: "burn"`, vertical video
+    only; `docs/adr/ADR-009-shorts-captions.md`): every cue needs
+    `words: [{text, start, end}]` (word timings from a transcription). The
+    cues are re-cut into one or two words each (a clause-ending word ends a
+    cue), drawn bold at 5.5 % of the frame height inside the safe zone
+    shared by TikTok, YouTube Shorts and Instagram Reels (top 10 %, bottom
+    22 %, left 5 %, right 14 %), smaller when two long words would not fit.
+    With `placement` a chunk moves to the top of the safe zone while a face
+    is under it. The response's `caption_profile.cues` lists the cues drawn.
+
 ## `translate` and `mux`
 
 - **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`/`ttml`/`ebu-tt-d`),

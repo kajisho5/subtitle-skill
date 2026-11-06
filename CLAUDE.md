@@ -237,6 +237,11 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Shorts captions** (ECOSYSTEM_ROADMAP step 11, `docs/adr/ADR-009-shorts-captions.md`,
+  `src/subtitle_skill/shorts.py`, `formats.ass.generate_shorts_ass`). `render`
+  `caption_profile: "shorts"` (burn, vertical video) needs `cue.words`; one- or
+  two-word cues inside the TikTok/Shorts/Reels safe zone. **Contract changed**.
+
 - **Regional caption profiles, ruby, vertical text** (ECOSYSTEM_ROADMAP step 10,
   `docs/adr/ADR-008-regional-profiles.md`, `src/subtitle_skill/regional.py`).
   `regional_profile: "ja-broadcast"` is opt-in on generate/translate/render;

@@ -215,3 +215,53 @@ def generate_ass(
         prefix = "{\\an8}" if position == "top" else ""
         events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue)}")
     return "\n".join(header + events) + "\n"
+
+
+def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
+                        positions: Optional[Mapping[str, str]] = None) -> str:
+    """The `shorts` caption profile (roadmap step 11, ADR-009) as ASS: one event per
+    one-or-two-word cue, bold, large, at a fixed `\\\\pos` inside the 9:16 safe zone
+    (`shorts.ShortsLayout`), drawn smaller when it would not fit the safe width."""
+    from ..shorts import OUTLINE, ShortsLayout
+
+    if width <= 0 or height <= 0:
+        raise SubtitleSkillError("INVALID_INPUT", "ASS burn needs the video's width and height")
+    layout = ShortsLayout(width, height)
+    boxes = layout.caption_boxes()
+    positions = positions or {}
+    outline = max(1, round(OUTLINE * height))
+    header = [
+        "[Script Info]",
+        "; written by subtitle-skill (caption_profile shorts)",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 2",
+        "ScaledBorderAndShadow: yes",
+        "YCbCr Matrix: None",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
+        "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,{font_for(document.language)},{layout.font_size},{ass_color(None)},{ass_color(None)},"
+        f"{ass_color(DEFAULT_OUTLINE_COLOR)},{ass_color(DEFAULT_OUTLINE_COLOR, alpha=0x80)},"
+        f"-1,0,0,0,100,100,0,0,1,{outline},0,2,0,0,0,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    events = []
+    cx = layout.centre_x()
+    for cue in sorted(document.cues, key=lambda c: (c.start, c.end, c.id)):
+        if cue.style is not None and cue.style.vertical:
+            raise SubtitleSkillError("UNSUPPORTED_FORMAT", f"cue {cue.id}: vertical text is not burned in")
+        box = boxes[positions.get(cue.id, "bottom")]
+        y = (box.y + box.h) * height
+        text = "".join(seg for seg, _r in display_segments(cue))
+        size = layout.fit_font_size(text)
+        events.append(
+            f"Dialogue: 0,{_timestamp(cue.start)},{_timestamp(cue.end)},Default,,0,0,0,,"
+            f"{{\\an2\\pos({cx:.0f},{y:.0f})\\fs{size}{_overrides(cue)}}}{escape_text(text)}"
+        )
+    return "\n".join(header + events) + "\n"

@@ -324,8 +324,19 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     # A burn that needs per-event layout goes through subtitle-skill's own ASS
     # (formats.ass): caption placement (step 8), a regional profile's speaker
     # colours or ruby (step 10). Colours are then per cue, not one whole-burn flag.
+    # request.caption_profile "shorts" (step 11, docs/adr/ADR-009-shorts-captions.md):
+    # one or two words per cue from word timings, large type in the 9:16 safe zone.
+    caption_profile = request.get("caption_profile")
+    if caption_profile is not None:
+        if caption_profile != "shorts":
+            raise SubtitleSkillError("INVALID_INPUT", f"caption_profile must be 'shorts', got {caption_profile!r}")
+        if mode != "burn":
+            raise SubtitleSkillError("INVALID_INPUT", "caption_profile 'shorts' is for burned captions (mode 'burn')")
     use_ass = mode == "burn" and (
-        request.get("placement") is not None or regional is not None or any(c.ruby for c in document.cues)
+        request.get("placement") is not None
+        or regional is not None
+        or caption_profile is not None
+        or any(c.ruby for c in document.cues)
     )
     effective_style: Optional[SubtitleStyle] = None
     if use_ass:
@@ -370,11 +381,32 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     real_video_duration = video_probe.get("duration")
     issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
 
+    video_info = video_probe.get("video") or {}
+    width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
+    if video_info.get("rotation") in (90, -90, 270, -270):
+        width, height = height, width
+
+    shorts_document = None
+    shorts_layout = None
+    if caption_profile == "shorts":
+        from .shorts import ShortsLayout, chunk_document
+
+        if not (height > width > 0):
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"caption_profile 'shorts' is for vertical video; this one is {width}x{height}"
+            )
+        shorts_document = chunk_document(document)
+        shorts_layout = ShortsLayout(width, height)
+
     placement_plan = None
     if placement_spec is not None:
         from .placement import plan_placement
 
-        placement_plan = plan_placement(document, placement_spec)
+        placement_plan = plan_placement(
+            shorts_document or document,
+            placement_spec,
+            boxes=shorts_layout.caption_boxes() if shorts_layout is not None else None,
+        )
         for item in placement_plan.unavoidable:
             issues.append(
                 ValidationIssue(
@@ -417,6 +449,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                     if placement_plan is not None
                     else {}
                 ),
+                **({"caption_profile": caption_profile} if caption_profile is not None else {}),
             },
         ),
     )
@@ -455,19 +488,15 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     if use_ass:
         # per-event alignment needs ASS: caption.py's SRT force_style is one setting
         # for the whole burn (the SRT above was generated only to apply its checks)
-        from .formats.ass import generate_ass
+        from .formats.ass import generate_ass, generate_shorts_ass
 
-        video_info = video_probe.get("video") or {}
-        width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
-        if video_info.get("rotation") in (90, -90, 270, -270):
-            width, height = height, width
-        subtitle_content = generate_ass(
-            document,
-            width=width,
-            height=height,
-            positions=placement_plan.positions if placement_plan is not None else None,
-            style=effective_style,
-        )
+        positions = placement_plan.positions if placement_plan is not None else None
+        if shorts_document is not None:
+            subtitle_content = generate_shorts_ass(shorts_document, width=width, height=height, positions=positions)
+        else:
+            subtitle_content = generate_ass(
+                document, width=width, height=height, positions=positions, style=effective_style
+            )
         burn_format, burn_style = "ass", None
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
     _write_text_exact(subtitle_tmp_path, subtitle_content)
@@ -518,6 +547,20 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         record["placement"] = placement_plan.to_dict()
     if regional is not None:
         record["regional_profile"] = regional
+    if shorts_document is not None:
+        from .shorts import MAX_WORDS, SAFE
+
+        record["caption_profile"] = {
+            "name": "shorts",
+            "cues": [
+                {"id": c.id, "source_cue": c.metadata["source_cue"], "start": c.start, "end": c.end,
+                 "text": c.text, "words": len(c.words)}
+                for c in shorts_document.cues
+            ],
+            "max_words": MAX_WORDS,
+            "safe_zone": dict(SAFE),
+            "font_size_px": shorts_layout.font_size,
+        }
     _write_sidecar(output_path, record)
     return _finish(
         record,
@@ -573,6 +616,8 @@ def _finish(
         response["conformance"] = record["conformance"]
     if record.get("regional_profile") is not None:
         response["regional_profile"] = record["regional_profile"]
+    if record.get("caption_profile") is not None:
+        response["caption_profile"] = record["caption_profile"]
     return response
 
 
