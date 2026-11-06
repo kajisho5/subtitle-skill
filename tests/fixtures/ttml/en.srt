@@ -1,0 +1,14 @@
+1
+00:00:01,000 --> 00:00:03,200
+Hello.
+Today we talk about subtitles.
+
+2
+00:00:03,500 --> 00:00:05,750
+Sato: "TTML" is a format
+broadcasters can take in.
+
+3
+00:00:06,000 --> 00:00:07,040
+<i>(applause) & more <cheers></i>
+

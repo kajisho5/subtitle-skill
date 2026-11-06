@@ -190,9 +190,9 @@ authoritative source, never re-describe this from memory:
 
 | Operation | Formats | Depends on |
 |---|---|---|
-| `generate` | SRT, WebVTT | nothing external |
+| `generate` | SRT, WebVTT, TTML (IMSC 1.1, EBU-TT-D) | nothing external |
 | `render` | SRT only | a reachable ffmpeg-skill install (`caption` + `probe` tools) |
-| `translate` | SRT, WebVTT | engine `memory`: nothing; `argos`: argostranslate + an installed package; `opus-mt`: ctranslate2 + sentencepiece + a converted model under `SUBTITLE_SKILL_OPUS_MT_DIR`; `ollama`: a local Ollama server with the model pulled; `deepl`: `DEEPL_AUTH_KEY` |
+| `translate` | SRT, WebVTT, TTML | engine `memory`: nothing; `argos`: argostranslate + an installed package; `opus-mt`: ctranslate2 + sentencepiece + a converted model under `SUBTITLE_SKILL_OPUS_MT_DIR`; `ollama`: a local Ollama server with the model pulled; `deepl`: `DEEPL_AUTH_KEY` |
 | `mux` | SRT only | ffmpeg-skill (`caption` + `probe`); 1.16+ for more than one track |
 
 Capability/error/format lists live in code (`src/subtitle_skill/contract.py`,
@@ -236,6 +236,13 @@ Ordered by value, not urgency:
    today) — not something to do speculatively.
 
 ### Done since the gaps above were first written
+
+- **TTML output: IMSC 1.1 Text (`ttml`) and EBU-TT-D (`ebu-tt-d`)**
+  (ECOSYSTEM_ROADMAP step 9, `docs/adr/ADR-007-ttml-output.md`,
+  `src/subtitle_skill/formats/ttml.py`). `generate`/`translate` formats; each
+  document is checked by `validate_ttml` before it is written. CI validates
+  against the vendored W3C TTML2 XSD (`lxml` is a CI test dependency only).
+  **Contract changed** (`formats`, descriptions, `conformance?`): re-pin needed.
 
 - **Captions placed away from faces** (ECOSYSTEM_ROADMAP step 8,
   `docs/adr/ADR-006-caption-placement.md`, `src/subtitle_skill/placement.py`,

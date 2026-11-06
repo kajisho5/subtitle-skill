@@ -6,6 +6,7 @@ from .doctor import RENDER_SUPPORTED_FORMATS
 from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS, MUX_CONTAINERS
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
+from .formats.ttml import EBU_TT_D_STANDARD, IMSC11_TEXT_PROFILE
 from .placement import DETECTIONS_SCHEMA, PLACEMENT_FIELDS, REFRAME_SCHEMA
 from .translation import DEFAULT_ENGINE, ENGINES
 
@@ -63,10 +64,17 @@ def build_contract() -> dict:
         "deterministic": True,
         "operations": {
             "generate": {
-                "description": "Validate a typed subtitle document and produce a subtitle file (no video I/O).",
+                "description": (
+                    "Validate a typed subtitle document and produce a subtitle file (no video I/O): SRT, WebVTT, "
+                    "TTML as IMSC 1.1 Text Profile ('ttml') or EBU-TT-D ('ebu-tt-d'; "
+                    "docs/adr/ADR-007-ttml-output.md). WebVTT cue positions are kept as TTML regions; a TTML "
+                    "document is checked against its profile's structural rules before it is written and the "
+                    "response carries `conformance`."
+                ),
                 "inputs": ["subtitle", "format", "output_path", "constraints?"],
-                "outputs": ["output", "sha256", "size", "timeline", "observation"],
+                "outputs": ["output", "sha256", "size", "timeline", "observation", "conformance?"],
                 "formats": list(SUPPORTED_FORMATS),
+                "ttml_profiles": {"ttml": IMSC11_TEXT_PROFILE, "ebu-tt-d": EBU_TT_D_STANDARD},
             },
             "render": {
                 "description": (
@@ -113,8 +121,8 @@ def build_contract() -> dict:
             },
             "translate": {
                 "description": (
-                    "Machine-translate a typed subtitle document into target_language and write it as SRT or "
-                    "WebVTT (docs/adr/ADR-004-translation-engine.md). Cue ids and start/end times are kept "
+                    "Machine-translate a typed subtitle document into target_language and write it as SRT, "
+                    "WebVTT, IMSC 1.1 TTML or EBU-TT-D (docs/adr/ADR-004-translation-engine.md). Cue ids and start/end times are kept "
                     "exactly; each cue is translated as one segment and re-broken for the target language "
                     "(locale profiles for ja/zh/ko, word wrap otherwise), then validated with the target "
                     "language's line-length and reading-speed limits (observations, never rewrites). "
@@ -150,6 +158,7 @@ def build_contract() -> dict:
                     "engine_version",
                     "source_language",
                     "target_language",
+                    "conformance?",
                 ],
                 "formats": list(SUPPORTED_FORMATS),
                 "engines": list(ENGINES),

@@ -19,7 +19,7 @@ from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from . import engine as engine_module
 from .engine import burn_in, ffmpeg_skill_script_hash, mux_tracks, resolve_ffmpeg_skill_root
 from .errors import SubtitleSkillError
-from .formats import GENERATORS, SUPPORTED_FORMATS, generate_srt
+from .formats import GENERATORS, SUPPORTED_FORMATS, TTML_FORMATS, generate_srt
 from .locales import profile_for
 from .models import SubtitleDocument, SubtitleStyle, _is_bcp47_ish
 from .pathpolicy import PathPolicy
@@ -141,6 +141,25 @@ def _identity_payload(document: SubtitleDocument, fmt: str, constraints: Subtitl
     return payload
 
 
+def _write_format(fmt: str, document: SubtitleDocument, output_path: Path) -> Optional[dict]:
+    """Generate `document` as `fmt` and write it. A TTML profile is checked against
+    its structural rules first (formats.ttml.validate_ttml); a document that does
+    not conform is never written. Returns the conformance record, or None."""
+    content = GENERATORS[fmt](document)
+    conformance = None
+    if fmt in TTML_FORMATS:
+        from .formats.ttml import EBU_TT_D_STANDARD, IMSC11_TEXT_PROFILE, check_ttml
+
+        check_ttml(content, profile=fmt)
+        conformance = {
+            "profile": IMSC11_TEXT_PROFILE if fmt == "ttml" else EBU_TT_D_STANDARD,
+            "valid": True,
+            "checked": "structural rules of the profile (formats.ttml.validate_ttml)",
+        }
+    _write_text_exact(output_path, content)
+    return conformance
+
+
 def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started) -> dict:
     output_path = policy.resolve_output(output_path_rel)
     identity = compute_identity(
@@ -154,8 +173,7 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
     if reused is not None:
         return _finish(reused, output_path, issues, "generate", reused=True, started=started)
 
-    content = GENERATORS[fmt](document)
-    _write_text_exact(output_path, content)
+    conformance = _write_format(fmt, document, output_path)
 
     sha256 = sha256_file(output_path)
     record = {
@@ -168,6 +186,8 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
         "size": output_path.stat().st_size,
         "cue_count": len(document.cues),
     }
+    if conformance is not None:
+        record["conformance"] = conformance
     _write_sidecar(output_path, record)
     return _finish(record, output_path, issues, "generate", reused=False, started=started)
 
@@ -484,6 +504,8 @@ def _finish(
         response["mode"] = mode
     if record.get("placement") is not None:
         response["placement"] = record["placement"]
+    if record.get("conformance") is not None:
+        response["conformance"] = record["conformance"]
     return response
 
 
@@ -621,8 +643,7 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
     misses = [(cue_id, entry.source, entry.target) for cue_id, entry in result.glossary_misses]
     issues = _translate_issues(translated, constraints, video_duration, misses)
 
-    content = GENERATORS[fmt](translated)
-    _write_text_exact(output_path, content)
+    conformance = _write_format(fmt, translated, output_path)
     sha256 = sha256_file(output_path)
     record = {
         "identity": identity,
@@ -640,6 +661,8 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
         "glossary_misses": [list(m) for m in misses],
         "document": translated.to_dict(),
     }
+    if conformance is not None:
+        record["conformance"] = conformance
     _write_sidecar(output_path, record)
     response = _finish(record, output_path, issues, "translate", reused=False, started=started)
     return _translate_response(response, record)
