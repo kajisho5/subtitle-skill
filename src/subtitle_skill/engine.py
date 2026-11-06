@@ -510,11 +510,16 @@ def burn_in(
     the document's cues; `style` here is already the single, resolved
     value to forward, or `None`.
     """
-    if subtitle_format != "srt":
+    if subtitle_format not in ("srt", "ass"):
         raise SubtitleSkillError(
             "UNSUPPORTED_FORMAT",
             f"render only supports format='srt' (ffmpeg-skill/caption burns SRT or ASS, never {subtitle_format!r})",
         )
+    # ASS is subtitle-skill's own internal burn layout (formats.ass, roadmap step 8):
+    # its styles are inside the file, so no style flag goes with it, and caption.py
+    # refuses `--mode mux --ass`.
+    if subtitle_format == "ass" and (mode != "burn" or style is not None):
+        raise SubtitleSkillError("INVALID_INPUT", "an ASS subtitle is only burned, with its styles inside the file")
 
     if mode not in ALLOWED_RENDER_MODES:
         raise SubtitleSkillError(
@@ -540,7 +545,7 @@ def burn_in(
         raise SubtitleSkillError("INVALID_INPUT", f"input has no video stream: {video_path}")
     input_duration = input_probe.get("duration")
 
-    argv = [str(video_path), "--srt", str(subtitle_path), "-o", str(output_path)]
+    argv = [str(video_path), f"--{subtitle_format}", str(subtitle_path), "-o", str(output_path)]
     # a re-render replaces subtitle-skill's own earlier output at the same path
     if _caption_takes_overwrite(root):
         argv.append("--overwrite")

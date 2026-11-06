@@ -260,6 +260,15 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         if color is not None or bold is not None or size is not None:
             effective_style = SubtitleStyle(color=color, bold=bold, size=size)
 
+    # request.placement (roadmap step 8, docs/adr/ADR-006-caption-placement.md):
+    # cues move from the bottom to the top caption box while a face (detection-skill
+    # detections@1) or a caller-named region overlaps the bottom one.
+    placement_spec = None
+    if request.get("placement") is not None:
+        from .placement import parse_placement
+
+        placement_spec = parse_placement(request["placement"], policy)
+
     video_path = policy.resolve_input(video_input_rel)
     video_sha256 = sha256_file(video_path)
     output_path = policy.resolve_output(output_path_rel)
@@ -278,8 +287,24 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             f"ffmpeg-skill install not found (checked {engine_module.FFMPEG_SKILL_DIR_ENV} and the standard "
             "~/.claude, ~/.cursor, ~/.codex and ./.claude skills directories)",
         )
-    real_video_duration = engine_module.probe(ffmpeg_skill_root, video_path).get("duration")
+    video_probe = engine_module.probe(ffmpeg_skill_root, video_path)
+    real_video_duration = video_probe.get("duration")
     issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
+
+    placement_plan = None
+    if placement_spec is not None:
+        from .placement import plan_placement
+
+        placement_plan = plan_placement(document, placement_spec)
+        for item in placement_plan.unavoidable:
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "CAPTION_OVERLAP_UNAVOIDABLE",
+                    item["cue_id"],
+                    "a face or region overlaps both the bottom and the top caption box; the cue stays at the bottom",
+                )
+            )
 
     # The render identity is anchored on the *content* of the ffmpeg-skill
     # scripts that will actually execute (sha256 of caption.py + _common.py),
@@ -307,6 +332,12 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 # they must invalidate a cache hit like everything else here.
                 "mode": mode,
                 "audio_stream": audio_stream,
+                **(
+                    {"placement": {"spec": placement_spec.raw, "inputs": placement_plan.inputs,
+                                   "top": sorted(placement_plan.top_cue_ids())}}
+                    if placement_plan is not None
+                    else {}
+                ),
             },
         ),
     )
@@ -338,15 +369,31 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     # for either mode -- burn has no equivalent for those either. See
     # formats.srt.generate_srt's docstring.
     allow_style_fields = frozenset({"color", "size"}) if mode == "burn" else frozenset()
-    subtitle_content = generate_srt(document, allow_style_fields=allow_style_fields)
-    subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{fmt}")
+    top_cue_ids = placement_plan.top_cue_ids() if placement_plan is not None else frozenset()
+    subtitle_content = generate_srt(document, allow_style_fields=allow_style_fields, top_cue_ids=top_cue_ids)
+    burn_format = fmt
+    burn_style = effective_style
+    if placement_plan is not None and mode == "burn":
+        # per-event alignment needs ASS: caption.py's SRT force_style is one setting
+        # for the whole burn (the SRT above was generated only to apply its checks)
+        from .formats.ass import generate_ass
+
+        video_info = video_probe.get("video") or {}
+        width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
+        if video_info.get("rotation") in (90, -90, 270, -270):
+            width, height = height, width
+        subtitle_content = generate_ass(
+            document, width=width, height=height, positions=placement_plan.positions, style=effective_style
+        )
+        burn_format, burn_style = "ass", None
+    subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
     _write_text_exact(subtitle_tmp_path, subtitle_content)
 
     try:
         engine_response = burn_in(
             video_path=video_path,
             subtitle_path=subtitle_tmp_path,
-            subtitle_format=fmt,
+            subtitle_format=burn_format,
             output_path=output_path,
             mode=mode,
             audio_stream=audio_stream,
@@ -358,7 +405,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             language=document.language,
             # The document-wide color/bold/size reduction computed above
             # (None for mode="mux", or when no cue set any of the three).
-            style=effective_style,
+            style=burn_style,
         )
     finally:
         subtitle_tmp_path.unlink(missing_ok=True)
@@ -384,6 +431,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             if k not in ("status", "engine_skill_version", "engine_script_sha256")
         },
     }
+    if placement_plan is not None:
+        record["placement"] = placement_plan.to_dict()
     _write_sidecar(output_path, record)
     return _finish(
         record,
@@ -433,6 +482,8 @@ def _finish(
         response["engine"] = engine
         response["engine_version"] = engine_version
         response["mode"] = mode
+    if record.get("placement") is not None:
+        response["placement"] = record["placement"]
     return response
 
 

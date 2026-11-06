@@ -109,6 +109,7 @@ them (no cue is deleted, merged, or shifted):
 | `CUE_TOO_SHORT` / `CUE_TOO_LONG` | outside `constraints.min_duration` / `max_duration` |
 | `READING_SPEED_TOO_HIGH` | more text than `constraints.reading_speed_cps` allows for the cue's duration |
 | `KINSOKU_LINE_START` / `KINSOKU_LINE_END` | (ja/zh/ko only) a line break leaves a character that may not begin a line (e.g. `。、」）ー ゃ っ`) at a line start, or one that may not end a line (e.g. `「『（`) at a line end |
+| `CAPTION_OVERLAP_UNAVOIDABLE` | (`render` with `placement` only) a face or region overlaps both the bottom and the top caption box while the cue is on screen; the cue stays at the bottom |
 
 **Locale profiles (ja / zh / ko).** When `subtitle.language`'s primary
 subtag is `ja`, `zh` or `ko` (`ja-JP`, `zh-Hans`, `ko-KR`, ...), line length
@@ -162,6 +163,22 @@ can omit `constraints` entirely.
     assumed); a plain 2-letter BCP47 tag like `"ja"`/`"en"` can be
     silently dropped from that container's stream tags with no error.
     Use `.mkv`/`.webm` output when the exact tag value must survive.
+  - `placement` (optional; `docs/adr/ADR-006-caption-placement.md`): keeps
+    captions off faces. `faces` is a workspace path to a detection-skill
+    `detections@1` document of kind `face` for this video; `reframe`
+    (optional) a `reframe@1` document when the video is the crop it chose,
+    so face boxes are mapped into the crop; `avoid` a list of fixed regions
+    `{name, box: [x, y, w, h] as fractions of the frame, start?, end?}` (a
+    sign-language window, a lower third); `min_hold` (seconds, default 1.0),
+    `max_lines` (height of the caption box, default 2), `min_score` (ignore
+    weaker face boxes). A cue moves from the bottom to the top caption box,
+    as a whole, when a face sampled while it is on screen (or a region active
+    then) overlaps the bottom box and nothing overlaps the top one. A short
+    run of bottom cues between two moved cues, on screen for less than
+    `min_hold`, moves with them. The response's `placement` lists every move
+    with the box that caused it (`moves[].cause`), and `top_cues`. A burn is
+    written as ASS with `{\an8}` on the moved cues and burned with
+    `caption --ass`; `mode: "mux"` puts `{\an8}` in the soft track.
 
 ## `translate` and `mux`
 

@@ -49,7 +49,12 @@ def _escape_text(cue: SubtitleCue, *, allow_style_fields: FrozenSet[str] = froze
     return text
 
 
-def generate_srt(document: SubtitleDocument, *, allow_style_fields: FrozenSet[str] = frozenset()) -> str:
+def generate_srt(
+    document: SubtitleDocument,
+    *,
+    allow_style_fields: FrozenSet[str] = frozenset(),
+    top_cue_ids: FrozenSet[str] = frozenset(),
+) -> str:
     """Render `document` as a plain .srt file.
 
     `allow_style_fields` is an internal escape hatch, used only by
@@ -67,6 +72,10 @@ def generate_srt(document: SubtitleDocument, *, allow_style_fields: FrozenSet[st
     equivalent for those either, for either mode (see
     `engine._style_argv`'s docstring), so they stay a real
     `UNSUPPORTED_FORMAT` for `render` too, not a silently-dropped field.
+
+    `top_cue_ids` (render's soft track with `placement`, roadmap step 8) puts
+    `{\\an8}` before those cues' text: the SubRip alignment tag players and
+    libass read as "top centre".
     """
     ordered = sorted(document.cues, key=lambda c: (c.start, c.end, c.id))
     blocks = []
@@ -76,7 +85,8 @@ def generate_srt(document: SubtitleDocument, *, allow_style_fields: FrozenSet[st
                 [
                     str(index),
                     f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}",
-                    _escape_text(cue, allow_style_fields=allow_style_fields),
+                    ("{\\an8}" if cue.id in top_cue_ids else "")
+                    + _escape_text(cue, allow_style_fields=allow_style_fields),
                     "",
                 ]
             )
