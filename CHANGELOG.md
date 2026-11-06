@@ -1,3 +1,7 @@
+## v0.7.0 - 2026-11-06
+
+- feat: regional caption profiles (ja-broadcast), ruby and vertical text (roadmap step 10) (#31) (a4676dc)
+
 ## v0.6.0 - 2026-11-06
 
 - feat(formats): TTML output as IMSC 1.1 Text Profile and EBU-TT-D (roadmap step 9) (#30) (dcfbb86)
