@@ -204,9 +204,9 @@ cannot be called.
 
 | Operation | Video I/O | Formats | What it does |
 |---|---|---|---|
-| `generate` | none | SRT, WebVTT | Validate the document, write a subtitle file |
+| `generate` | none | SRT, WebVTT, TTML (IMSC 1.1 Text, EBU-TT-D) | Validate the document, write a subtitle file ([ADR-007](docs/adr/ADR-007-ttml-output.md) for TTML) |
 | `render` | required | **SRT only** | Validate against the real video duration, generate the SRT, delegate burn-in (or mux) to ffmpeg-skill's `caption` tool, verify the output |
-| `translate` | none | SRT, WebVTT | Machine-translate a document into `target_language`: same cue ids and timecodes, text re-broken and re-validated for the target language, glossary checked ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
+| `translate` | none | SRT, WebVTT, TTML | Machine-translate a document into `target_language`: same cue ids and timecodes, text re-broken and re-validated for the target language, glossary checked ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
 | `mux` | required | **SRT only** | Several documents (one per language) → one video with language-tagged soft subtitle tracks, in one ffmpeg-skill `caption --mode mux` call ([ADR-005](docs/adr/ADR-005-multi-language-mux.md)) |
 
 `render`'s `mode` (default `"burn"`, or `"mux"`) and `audio_stream`
@@ -327,10 +327,19 @@ caption.py's own default, track 0); `constraints` is optional for both
 
 ## Format support
 
-| | `generate` | `render` (burn-in) |
+| | `generate` / `translate` | `render` (burn-in) |
 |---|---|---|
 | SRT | ✅ | ✅ |
 | WebVTT | ✅ | ❌ `UNSUPPORTED_FORMAT` |
+| TTML: IMSC 1.1 Text (`ttml`) | ✅ | ❌ `UNSUPPORTED_FORMAT` |
+| TTML: EBU-TT-D (`ebu-tt-d`) | ✅ | ❌ `UNSUPPORTED_FORMAT` |
+
+TTML output ([ADR-007](docs/adr/ADR-007-ttml-output.md)) keeps WebVTT cue settings as
+regions (`line` → region top edge, `position`/`size` → region centre and width,
+`align` → `tts:textAlign`) and `bold`/`italic`/`color` as named styles. Each
+document is checked against its profile's structural rules before it is written
+(response `conformance`); the tests also validate it against the W3C TTML2 XML
+Schema.
 
 **Generating a WebVTT file does not mean it can be burned in.** This is
 a real constraint of the tool `render` delegates to — ffmpeg-skill's
@@ -341,12 +350,12 @@ anything is generated.
 Neither generator silently drops style it can't represent — it raises
 `UNSUPPORTED_FORMAT` instead:
 
-| | SRT | WebVTT |
-|---|---|---|
-| `align` / `position` / `line` / `size` | rejected (no native positioning) | native cue settings |
-| `bold` / `italic` | `<b>` / `<i>` tags | `<b>` / `<i>` tags |
-| `color` | rejected | rejected (no safe, non-CSS-injecting form here) |
-| `speaker` | `"Speaker: "` text prefix | `"Speaker: "` text prefix |
+| | SRT | WebVTT | TTML (IMSC 1.1 / EBU-TT-D) |
+|---|---|---|---|
+| `align` / `position` / `line` / `size` | rejected (no native positioning) | native cue settings | regions + `tts:textAlign` |
+| `bold` / `italic` | `<b>` / `<i>` tags | `<b>` / `<i>` tags | named styles |
+| `color` | rejected | rejected (no safe, non-CSS-injecting form here) | named style `tts:color` |
+| `speaker` | `"Speaker: "` text prefix | `"Speaker: "` text prefix | `"Speaker: "` text prefix |
 
 Cue/document `metadata` is auxiliary/provenance data — never written
 into the rendered subtitle body of either format.
@@ -656,7 +665,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D) |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope

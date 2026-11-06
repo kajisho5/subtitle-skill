@@ -9,6 +9,7 @@ is intentionally never written into the subtitle body of any format.
 """
 from __future__ import annotations
 
+import re
 from typing import FrozenSet
 
 from ..errors import SubtitleSkillError
@@ -92,3 +93,42 @@ def generate_srt(
             )
         )
     return "\n".join(blocks) + ("\n" if blocks else "")
+
+
+_SRT_TIME = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)[,.](\d{1,3})$")
+
+
+def _parse_srt_time(value: str) -> float:
+    m = _SRT_TIME.match(value.strip())
+    if not m:
+        raise SubtitleSkillError("INVALID_INPUT", f"SRT time {value!r} is not hh:mm:ss,mmm")
+    hours, minutes, secs, ms = m.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + int(secs) + int(ms.ljust(3, "0")) / 1000.0
+
+
+def parse_srt(text: str, *, language: str, document_id: str = "srt") -> SubtitleDocument:
+    """Read a SubRip file back into a document (used for format round trips).
+
+    The block number becomes the cue id; a cue whose whole text is wrapped in
+    `<b>`/`<i>` gets `style.bold`/`style.italic`. Speaker prefixes stay in the
+    text: SRT has no separate speaker field."""
+    cues = []
+    blocks = re.split(r"\r?\n\s*\r?\n", text.lstrip("﻿").strip())
+    for block in blocks:
+        lines = block.splitlines()
+        if len(lines) < 2:
+            raise SubtitleSkillError("INVALID_INPUT", f"SRT block without a timing line: {block[:40]!r}")
+        if "-->" not in lines[1]:
+            raise SubtitleSkillError("INVALID_INPUT", f"SRT block {lines[0]!r} has no timing line")
+        start, end = (part.strip().split(" ")[0] for part in lines[1].split("-->", 1))
+        body = "\n".join(lines[2:])
+        style = {}
+        for tag, field in (("i", "italic"), ("b", "bold")):
+            if body.startswith(f"<{tag}>") and body.endswith(f"</{tag}>"):
+                body = body[len(tag) + 2:-(len(tag) + 3)]
+                style[field] = True
+        cue = {"id": lines[0].strip(), "start": _parse_srt_time(start), "end": _parse_srt_time(end), "text": body}
+        if style:
+            cue["style"] = style
+        cues.append(cue)
+    return SubtitleDocument.from_dict({"id": document_id, "language": language, "cues": cues})

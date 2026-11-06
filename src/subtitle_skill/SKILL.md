@@ -132,9 +132,16 @@ can omit `constraints` entirely.
 
 ## `generate` vs. `render`
 
-- **`generate`**: no video I/O. Validates the document, writes an SRT or
-  WebVTT file. Use this when you only need the subtitle file (e.g. to
+- **`generate`**: no video I/O. Validates the document, writes an SRT,
+  WebVTT or TTML file. Use this when you only need the subtitle file (e.g. to
   hand to another tool, or to review before committing to a burn-in).
+  - `format: "ttml"` writes IMSC 1.1 Text Profile; `format: "ebu-tt-d"`
+    writes EBU-TT-D (EBU Tech 3380). Ask for these when a broadcaster or
+    distributor wants TTML. WebVTT cue settings (`line`, `position`, `size`,
+    `align`) become TTML regions, and `bold`/`italic`/`color` named styles
+    (TTML, unlike SRT and WebVTT, can carry colour). The written document is
+    checked against its profile first; the response's `conformance` says
+    which profile it conforms to. See `docs/adr/ADR-007-ttml-output.md`.
 - **`render`**: requires `video_input`; `format` must be `"srt"`.
   Validates, generates the SRT, then delegates the actual burn-in to
   ffmpeg-skill's `caption` tool. Requesting `render` with `format: "vtt"`
@@ -182,7 +189,7 @@ can omit `constraints` entirely.
 
 ## `translate` and `mux`
 
-- **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`),
+- **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`/`ttml`/`ebu-tt-d`),
   `output_path`, optional `engine`, `glossary`, `translation_memory`,
   `constraints`. Cue ids and start/end times are copied; each cue is one
   segment; the text is re-broken for the target language and validated
