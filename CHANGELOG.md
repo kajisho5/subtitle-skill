@@ -1,3 +1,7 @@
+## v0.4.3 - 2026-11-06
+
+- docs(roadmap): field review steps (2026-11-05) (#28) (6fe4f52)
+
 ## v0.4.2 - 2026-11-05
 
 - docs(roadmap): step 8 (captions placed away from faces) and review (#27) (dc9c795)
