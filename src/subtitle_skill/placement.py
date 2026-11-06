@@ -323,11 +323,12 @@ def _describe(o: Obstacle) -> dict:
     return {"kind": "region", "name": o.name, "box_norm": o.box.as_list()}
 
 
-def plan_placement(document: SubtitleDocument, spec: PlacementSpec) -> PlacementPlan:
+def plan_placement(document: SubtitleDocument, spec: PlacementSpec, *, boxes: Optional[dict] = None) -> PlacementPlan:
+    """`boxes` replaces the default caption boxes (the `shorts` profile has its own)."""
     faces, inputs, step = load_face_obstacles(spec)
     inputs["regions"] = [o.name for o in spec.regions]
     return plan_from_obstacles(document, faces, spec.regions, step=step, min_hold=spec.min_hold,
-                               max_lines=spec.max_lines, inputs=inputs)
+                               max_lines=spec.max_lines, inputs=inputs, boxes=boxes)
 
 
 def plan_from_obstacles(document: SubtitleDocument, faces: Sequence[Obstacle], regions: Sequence[Obstacle], *,

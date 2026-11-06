@@ -232,6 +232,15 @@ records every move and the box that caused it. A burn is written as ASS
 "placement": {"faces": "faces.json", "avoid": [{"name": "sign-language", "box": [0.7, 0.55, 0.28, 0.4]}], "min_hold": 1.0}
 ```
 
+### Shorts captions (`render` `caption_profile: "shorts"`)
+
+For vertical clips: cues are re-cut from their word timings (`cue.words`) into one
+or two words each and burned bold and large inside the safe zone every 9:16
+destination leaves clear (TikTok, YouTube Shorts, Reels: top 10 %, bottom 22 %,
+left 5 %, right 14 %, from ffmpeg-skill's platform table). With `placement`, a cue
+moves to the top of the safe zone while a face is under it
+([ADR-009](docs/adr/ADR-009-shorts-captions.md)).
+
 ### Ruby, vertical text and regional profiles
 
 Cues can carry ruby (`"ruby": [{"base": "字幕", "text": "じまく"}]`) and
@@ -679,7 +688,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope

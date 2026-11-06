@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-0.4.1, version single-sourced from `pyproject.toml` (step 1). `generate` (SRT/VTT with line/cps/duration validation), `render` (burn or mux, SRT), `translate` and `mux` (steps 5-6). 106 tests, CI on 3 OSes x 2 Pythons.
+Version single-sourced from `pyproject.toml` (step 1). `generate` (SRT / WebVTT / TTML as IMSC 1.1 Text and EBU-TT-D, with line/cps/duration validation), `render` (burn or mux, SRT; caption placement away from faces, regional profiles, ruby and the `shorts` profile burn through subtitle-skill's ASS), `translate` and `mux` (steps 5-6). CI on 3 OSes x 2 Pythons; burn tests need ffmpeg and run where it is installed.
 
 ## What this repository owns
 
@@ -20,7 +20,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Wiring
 
-Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.4.1 (video-production-agent#102). Not wired: audio_stream, `translate` and the multi-language `mux` operation (dubbing-skill step 11 needs translate). Delegates to ffmpeg-skill caption, probe.
+Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.4.1 (video-production-agent#102). Not wired: audio_stream, `translate`, the multi-language `mux` operation (dubbing-skill step 11 needs translate), and everything from steps 8-11 (`placement`, the TTML formats, `regional_profile`, `caption_profile`, cue `ruby`/`words`, `style.vertical`); the contract changed in each of those steps, so the agent's pinned contract must be re-pinned first. Delegates to ffmpeg-skill caption, probe.
 
 ## Steps
 
@@ -50,9 +50,10 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
   - Why: broadcasters and platforms in each region get the caption look they expect, without changing the defaults for everyone else（なぜ要るか：地域ごとの放送の字幕慣習に、既定を変えずに合わせられる）
   - Done when: a fixture with two speakers and one ruby word burns in with the `ja-broadcast` profile's colours and ruby, the TTML carries both, and the same fixture without a profile uses the international defaults
   - Done (ADR-008): `regional_profile` (opt-in; `ja-broadcast`: speaker colours white/yellow/cyan/green, no name prefix, 15 x 2), cue `ruby` (IMSC ruby in TTML, `<ruby>` in WebVTT, drawn over its base in burn-in, bracketed in SRT/EBU-TT-D), `style.vertical` (TTML `tbrl`, WebVTT `vertical:rl`). `tests/fixtures/regional/ja_two_speakers_ruby.json` burns with yellow for the second speaker and ruby above the line, its TTML carries colours and ruby, and without a profile it is white with name prefixes. Not done: vertical text is not burned in (`UNSUPPORTED_FORMAT`; libass vertical not verified); the colour order and 15-character limit were not checked against a primary guideline text
-- [ ] **11. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
+- [x] **11. Shorts captions** — a `shorts` profile for burned captions on vertical clips: one or two words per cue from word timings, large type inside the platform's safe zone, the speaker's face avoided (step 8)
   - なぜ要るか：縦型の切り出しに、読みやすい大きな字幕を自動で載せられる
   - Done when: a 9:16 fixture's cues sit inside the TikTok / Shorts safe zone and never exceed two words
+  - Done (ADR-009): `render` `caption_profile: "shorts"` (burn, vertical video) re-cuts cues from `cue.words` into one- or two-word cues, bold at 5.5 % of the height inside the safe zone shared by TikTok / Shorts / Reels (ffmpeg-skill `_platforms.py`), faces avoided with `placement`. `tests/fixtures/shorts/vertical_words_en.json` on 9:16: seven cues, none over two words, every burned cue's pixels inside the safe zone
 
 ## Boundaries
 
