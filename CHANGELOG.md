@@ -1,3 +1,7 @@
+## v0.6.0 - 2026-11-06
+
+- feat(formats): TTML output as IMSC 1.1 Text Profile and EBU-TT-D (roadmap step 9) (#30) (dcfbb86)
+
 ## v0.5.0 - 2026-11-06
 
 - feat(render): place captions away from faces (roadmap step 8) (#29) (e0bd945)
