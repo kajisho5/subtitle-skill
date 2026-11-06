@@ -7,6 +7,7 @@ from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
 from .formats.ttml import EBU_TT_D_STANDARD, IMSC11_TEXT_PROFILE
+from .regional import PROFILES as REGIONAL_PROFILES
 from .placement import DETECTIONS_SCHEMA, PLACEMENT_FIELDS, REFRAME_SCHEMA
 from .translation import DEFAULT_ENGINE, ENGINES
 
@@ -69,9 +70,13 @@ def build_contract() -> dict:
                     "TTML as IMSC 1.1 Text Profile ('ttml') or EBU-TT-D ('ebu-tt-d'; "
                     "docs/adr/ADR-007-ttml-output.md). WebVTT cue positions are kept as TTML regions; a TTML "
                     "document is checked against its profile's structural rules before it is written and the "
-                    "response carries `conformance`."
+                    "response carries `conformance`. Cue `ruby` is IMSC ruby in TTML, `<ruby>` in WebVTT and "
+                    "the reading in brackets in SRT/EBU-TT-D (RUBY_AS_TEXT); `style.vertical` is TTML "
+                    "`tts:writingMode=\"tbrl\"` / WebVTT `vertical:rl`. `regional_profile` (opt-in, "
+                    "docs/adr/ADR-008-regional-profiles.md; first: `ja-broadcast`) applies a region's broadcast "
+                    "conventions: speaker colours where the format carries colour, line limits."
                 ),
-                "inputs": ["subtitle", "format", "output_path", "constraints?"],
+                "inputs": ["subtitle", "format", "output_path", "constraints?", "regional_profile?"],
                 "outputs": ["output", "sha256", "size", "timeline", "observation", "conformance?"],
                 "formats": list(SUPPORTED_FORMATS),
                 "ttml_profiles": {"ttml": IMSC11_TEXT_PROFILE, "ebu-tt-d": EBU_TT_D_STANDARD},
@@ -97,7 +102,9 @@ def build_contract() -> dict:
                     "bottom box: one decision per cue, a `min_hold` so neighbouring cues do not jump, "
                     "every move recorded with the box that caused it in the response's `placement`. "
                     "A burn then goes through ffmpeg-skill `caption --ass` with per-event alignment; "
-                    "a soft track gets `{\\an8}` on the moved cues."
+                    "a soft track gets `{\\an8}` on the moved cues. `regional_profile` (burn: speaker "
+                    "colours per cue) and cue `ruby` (drawn over its base) also burn through that ASS; "
+                    "`style.vertical` is not burned (UNSUPPORTED_FORMAT)."
                 ),
                 "inputs": [
                     "video_input",
@@ -108,8 +115,12 @@ def build_contract() -> dict:
                     "mode?",
                     "audio_stream?",
                     "placement?",
+                    "regional_profile?",
                 ],
-                "outputs": ["output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?"],
+                "outputs": [
+                    "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
+                    "regional_profile?",
+                ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
                 "placement": {
@@ -146,6 +157,7 @@ def build_contract() -> dict:
                     "glossary?",
                     "translation_memory?",
                     "constraints?",
+                    "regional_profile?",
                 ],
                 "outputs": [
                     "output",
@@ -203,6 +215,8 @@ def build_contract() -> dict:
             "render_modes": sorted(ALLOWED_RENDER_MODES),
             "translation_engines": list(ENGINES),
             "mux_containers": sorted(MUX_CONTAINERS),
+            "regional_profiles": sorted(REGIONAL_PROFILES),
+            "ruby": True,
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -215,7 +229,9 @@ def build_contract() -> dict:
                 "max_duration",
                 "reading_speed_cps",
             ],
-            "style": ["align", "position", "line", "size", "bold", "italic", "color"],
+            "style": ["align", "position", "line", "size", "bold", "italic", "color", "vertical"],
+            "cue": ["id", "start", "end", "text", "speaker", "style", "metadata", "ruby"],
+            "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
             "render": ["mode", "audio_stream", "placement"],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],

@@ -109,6 +109,7 @@ them (no cue is deleted, merged, or shifted):
 | `CUE_TOO_SHORT` / `CUE_TOO_LONG` | outside `constraints.min_duration` / `max_duration` |
 | `READING_SPEED_TOO_HIGH` | more text than `constraints.reading_speed_cps` allows for the cue's duration |
 | `KINSOKU_LINE_START` / `KINSOKU_LINE_END` | (ja/zh/ko only) a line break leaves a character that may not begin a line (e.g. `。、」）ー ゃ っ`) at a line start, or one that may not end a line (e.g. `「『（`) at a line end |
+| `RUBY_AS_TEXT` | (`generate` to `srt` / `ebu-tt-d`) the format has no ruby, so the cue's reading is written in brackets after its base (`字幕（じまく）`) |
 | `CAPTION_OVERLAP_UNAVOIDABLE` | (`render` with `placement` only) a face or region overlaps both the bottom and the top caption box while the cue is on screen; the cue stays at the bottom |
 
 **Locale profiles (ja / zh / ko).** When `subtitle.language`'s primary
@@ -129,6 +130,26 @@ If you want subtitle-skill to enforce your own house style (e.g. max 32
 chars/line), pass `constraints` in the request — do not treat the
 built-in defaults as "the correct" values; they exist only so a caller
 can omit `constraints` entirely.
+
+## Ruby, vertical text and regional profiles
+
+- **Ruby** (furigana) is cue content: `"ruby": [{"base": "字幕", "text": "じまく"}]`,
+  each `base` found in the cue text in order. TTML writes IMSC ruby, WebVTT
+  `<ruby>`, `render` draws the reading over its base; SRT and EBU-TT-D have no
+  ruby and get `字幕（じまく）` with a `RUBY_AS_TEXT` observation.
+- **Vertical text**: `style.vertical: true` → TTML `tts:writingMode="tbrl"`
+  (a column region at the right edge), WebVTT `vertical:rl`. Not burned in
+  (`UNSUPPORTED_FORMAT`) and not SRT.
+- **`regional_profile`** (opt-in, `generate` / `translate` / `render`;
+  `docs/adr/ADR-008-regional-profiles.md`). Without it the international
+  defaults apply: white text, `Speaker: ` prefixes, the locale's line limits.
+  `ja-broadcast` (Japanese documents only): speakers by colour in order of
+  first appearance (white, yellow, cyan, green) with no name drawn, 15
+  full-width characters x 2 lines unless your `constraints` say otherwise.
+  Colours are applied only where the output carries them (TTML, EBU-TT-D,
+  a burn); SRT, WebVTT and soft tracks keep the names instead. The response's
+  `regional_profile` gives the speaker → colour map. `contract --json`
+  `parameters.regional_profiles` lists every profile.
 
 ## `generate` vs. `render`
 

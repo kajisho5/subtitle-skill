@@ -1,0 +1,9 @@
+{
+  "id": "ja-two-speakers-ruby",
+  "language": "ja",
+  "cues": [
+    {"id": "1", "start": 0.5, "end": 2.5, "speaker": "佐藤", "text": "今日は字幕の話です", "ruby": [{"base": "字幕", "text": "じまく"}]},
+    {"id": "2", "start": 3.0, "end": 5.0, "speaker": "田中", "text": "よろしくお願いします"},
+    {"id": "3", "start": 5.5, "end": 7.5, "speaker": "佐藤", "text": "始めましょう"}
+  ]
+}

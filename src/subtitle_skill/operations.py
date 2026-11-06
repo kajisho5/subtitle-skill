@@ -123,12 +123,59 @@ def execute(request: Mapping[str, Any]) -> dict:
     if video_duration is not None and (not isinstance(video_duration, (int, float)) or video_duration <= 0):
         raise SubtitleSkillError("INVALID_INPUT", "video_duration must be a positive number")
 
+    document, constraints, regional = _apply_regional(request, document, constraints)
+
     issues = validate_document(document, constraints=constraints, video_duration=video_duration)
+    issues += _ruby_issues(document, fmt if operation == "generate" else None)
     document = document.sorted_by_start()
 
     if operation == "generate":
-        return _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started)
-    return _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started)
+        return _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional)
+    return _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional)
+
+
+def _apply_regional_constraints(profile, constraints: SubtitleConstraints) -> tuple:
+    from dataclasses import replace as _replace
+
+    merged = _replace(
+        constraints,
+        max_chars_per_line=constraints.max_chars_per_line or profile.max_chars_per_line,
+        max_lines=constraints.max_lines or profile.max_lines,
+    )
+    return merged, None
+
+
+def _apply_regional(request: Mapping[str, Any], document: SubtitleDocument, constraints: SubtitleConstraints) -> tuple:
+    """`request.regional_profile` (roadmap step 10, docs/adr/ADR-008-regional-profiles.md):
+    the document as the profile draws it, the constraints with the profile's line
+    limits where the caller set none, and the record for the response. Without a
+    profile all three are unchanged / None."""
+    name = request.get("regional_profile")
+    if name is None:
+        return document, constraints, None
+    from .regional import apply_profile, profile_named
+
+    profile = profile_named(name)
+    operation, fmt = request.get("operation"), request.get("format")
+    carried = fmt in TTML_FORMATS if operation == "generate" else request.get("mode", "burn") == "burn"
+    document, colors = apply_profile(profile, document, colors_carried=carried)
+    merged, _ = _apply_regional_constraints(profile, constraints)
+    return document, merged, {"name": profile.name, "speaker_colors": colors, "colors_carried": carried}
+
+
+#: formats with no ruby: the reading is written in brackets after its base
+_RUBY_AS_TEXT_FORMATS = ("srt", "ebu-tt-d")
+
+
+def _ruby_issues(document: SubtitleDocument, fmt: Optional[str]) -> list:
+    if fmt not in _RUBY_AS_TEXT_FORMATS:
+        return []
+    return [
+        ValidationIssue("warning", "RUBY_AS_TEXT", cue.id,
+                        f"{fmt} has no ruby: the reading is written in brackets after its base")
+        for cue in document.cues
+        if cue.ruby
+    ]
 
 
 def _identity_payload(document: SubtitleDocument, fmt: str, constraints: SubtitleConstraints, extra: dict) -> dict:
@@ -160,7 +207,7 @@ def _write_format(fmt: str, document: SubtitleDocument, output_path: Path) -> Op
     return conformance
 
 
-def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started) -> dict:
+def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional=None) -> dict:
     output_path = policy.resolve_output(output_path_rel)
     identity = compute_identity(
         skill_version=SKILL_VERSION,
@@ -188,6 +235,8 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
     }
     if conformance is not None:
         record["conformance"] = conformance
+    if regional is not None:
+        record["regional_profile"] = regional
     _write_sidecar(output_path, record)
     return _finish(record, output_path, issues, "generate", reused=False, started=started)
 
@@ -225,7 +274,7 @@ def _document_wide_style_value(document: SubtitleDocument, field: str):
     return next(iter(seen), None)
 
 
-def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started) -> dict:
+def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional=None) -> dict:
     if fmt != "srt":
         raise SubtitleSkillError(
             "UNSUPPORTED_FORMAT",
@@ -272,8 +321,18 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     # picking one cue's value and silently dropping the rest. Only
     # meaningful for mode="burn" -- caption.py's own docs say styling has no
     # effect on a soft-muxed stream, so mode="mux" does not even look.
+    # A burn that needs per-event layout goes through subtitle-skill's own ASS
+    # (formats.ass): caption placement (step 8), a regional profile's speaker
+    # colours or ruby (step 10). Colours are then per cue, not one whole-burn flag.
+    use_ass = mode == "burn" and (
+        request.get("placement") is not None or regional is not None or any(c.ruby for c in document.cues)
+    )
     effective_style: Optional[SubtitleStyle] = None
-    if mode == "burn":
+    if use_ass:
+        size = _document_wide_style_value(document, "size")
+        if size is not None:
+            effective_style = SubtitleStyle(size=size)
+    elif mode == "burn":
         color = _document_wide_style_value(document, "color")
         bold = _document_wide_style_value(document, "bold")
         size = _document_wide_style_value(document, "size")
@@ -393,7 +452,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     subtitle_content = generate_srt(document, allow_style_fields=allow_style_fields, top_cue_ids=top_cue_ids)
     burn_format = fmt
     burn_style = effective_style
-    if placement_plan is not None and mode == "burn":
+    if use_ass:
         # per-event alignment needs ASS: caption.py's SRT force_style is one setting
         # for the whole burn (the SRT above was generated only to apply its checks)
         from .formats.ass import generate_ass
@@ -403,7 +462,11 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         if video_info.get("rotation") in (90, -90, 270, -270):
             width, height = height, width
         subtitle_content = generate_ass(
-            document, width=width, height=height, positions=placement_plan.positions, style=effective_style
+            document,
+            width=width,
+            height=height,
+            positions=placement_plan.positions if placement_plan is not None else None,
+            style=effective_style,
         )
         burn_format, burn_style = "ass", None
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
@@ -453,6 +516,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     }
     if placement_plan is not None:
         record["placement"] = placement_plan.to_dict()
+    if regional is not None:
+        record["regional_profile"] = regional
     _write_sidecar(output_path, record)
     return _finish(
         record,
@@ -506,6 +571,8 @@ def _finish(
         response["placement"] = record["placement"]
     if record.get("conformance") is not None:
         response["conformance"] = record["conformance"]
+    if record.get("regional_profile") is not None:
+        response["regional_profile"] = record["regional_profile"]
     return response
 
 
@@ -526,6 +593,7 @@ _TRANSLATE_KEYS = frozenset(
         "translation_memory",
         "constraints",
         "video_duration",
+        "regional_profile",
     }
 )
 
@@ -585,6 +653,12 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
         raise SubtitleSkillError("MISSING_INPUT", "engine 'memory' needs a non-empty translation_memory")
     constraints = SubtitleConstraints.from_dict(request.get("constraints"))
     video_duration = _check_video_duration(request)
+    regional_profile = None
+    if request.get("regional_profile") is not None:
+        from .regional import check_language, profile_named
+
+        regional_profile = profile_named(request["regional_profile"])
+        check_language(regional_profile, target)
 
     policy = PathPolicy(workspace)
     output_path = policy.resolve_output(output_path_rel)
@@ -598,6 +672,8 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
     engine = translation.make_engine(engine_name, memory=memory)
     engine_version = engine.request_version(source.language, target)
 
+    if regional_profile is not None:
+        constraints, _ = _apply_regional_constraints(regional_profile, constraints)
     target_profile = profile_for(target)
     max_chars = constraints.max_chars_per_line or (
         target_profile.max_chars_per_line if target_profile is not None else DEFAULT_MAX_CHARS_PER_LINE
@@ -618,6 +694,7 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
                 "engine_version": engine_version,
                 "glossary": [[e.source, e.target] for e in glossary],
                 "video_duration": video_duration,
+                **({"regional_profile": regional_profile.name} if regional_profile is not None else {}),
             },
         ),
     )
@@ -640,6 +717,13 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
         engine_version=engine_version,
     )
     translated = result.document
+    regional = None
+    if regional_profile is not None:
+        from .regional import apply_profile
+
+        carried = fmt in TTML_FORMATS
+        translated, colors = apply_profile(regional_profile, translated, colors_carried=carried)
+        regional = {"name": regional_profile.name, "speaker_colors": colors, "colors_carried": carried}
     misses = [(cue_id, entry.source, entry.target) for cue_id, entry in result.glossary_misses]
     issues = _translate_issues(translated, constraints, video_duration, misses)
 
@@ -663,6 +747,8 @@ def _run_translate(request: Mapping[str, Any], started: float) -> dict:
     }
     if conformance is not None:
         record["conformance"] = conformance
+    if regional is not None:
+        record["regional_profile"] = regional
     _write_sidecar(output_path, record)
     response = _finish(record, output_path, issues, "translate", reused=False, started=started)
     return _translate_response(response, record)

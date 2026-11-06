@@ -237,6 +237,13 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Regional caption profiles, ruby, vertical text** (ECOSYSTEM_ROADMAP step 10,
+  `docs/adr/ADR-008-regional-profiles.md`, `src/subtitle_skill/regional.py`).
+  `regional_profile: "ja-broadcast"` is opt-in on generate/translate/render;
+  cue `ruby` and `style.vertical` are content. A profile or ruby sends a burn
+  through `formats.ass` (per-event colours, ruby laid out with `\pos`).
+  Vertical text is not burned in. **Contract changed**: re-pin needed.
+
 - **TTML output: IMSC 1.1 Text (`ttml`) and EBU-TT-D (`ebu-tt-d`)**
   (ECOSYSTEM_ROADMAP step 9, `docs/adr/ADR-007-ttml-output.md`,
   `src/subtitle_skill/formats/ttml.py`). `generate`/`translate` formats; each
