@@ -1,3 +1,7 @@
+## v0.5.0 - 2026-11-06
+
+- feat(render): place captions away from faces (roadmap step 8) (#29) (e0bd945)
+
 ## v0.4.3 - 2026-11-06
 
 - docs(roadmap): field review steps (2026-11-05) (#28) (6fe4f52)
