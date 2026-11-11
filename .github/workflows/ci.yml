@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # main only: a pull request branch is covered by pull_request, and running on its pushes too ran every job twice
+    branches: ["main"]
   pull_request:
     branches: ["**"]
+
+concurrency:
+  # a newer commit on a pull request cancels the runs of the commit it replaces; every other run (main, tags,
+  # schedule, manual) has its own group and is never cancelled
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
