@@ -67,7 +67,9 @@ def main(argv: "list[str] | None" = None) -> int:
             print(
                 f"\nINCOMPATIBLE: the test suite fails against ffmpeg-skill {version} ({head}). "
                 "Fix subtitle_skill.engine for the new caption/probe behaviour; re-vendoring "
-                "tests/fixtures/ffmpeg_skill_vendor/ is optional."
+                "tests/fixtures/ffmpeg_skill_vendor/ is optional. If the failures say that no installed "
+                "font covers a script, the machine is missing a font (for Japanese: fonts-noto-cjk), "
+                "and nothing changed in ffmpeg-skill."
             )
             return 1
 

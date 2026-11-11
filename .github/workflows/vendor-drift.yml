@@ -8,6 +8,14 @@ name: ffmpeg-skill compatibility check
 # against the v3.0.0 tag, the first ffmpeg-skill major that needs Python 3.10+
 # and FFmpeg 6.1+ (ci.yml's offline vendored copy stays 2.x, so Python 3.9 is
 # covered there).
+#
+# The runner needs a Japanese font: tests/test_regional.py burns Japanese
+# captions, and ffmpeg-skill 3.x refuses to burn text that no installed font
+# covers (it fails the job instead of drawing empty boxes). ubuntu-latest has
+# no CJK font, so the font is installed below and checked before the tests.
+#
+# A failed scheduled run opens an issue in this repository, or comments on
+# the open one (the `report` job). A run started by hand does not.
 
 on:
   schedule:
@@ -30,8 +38,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Install ffmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Install ffmpeg and a Japanese font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fontconfig fonts-noto-cjk
+      - name: Check that a font covers Japanese
+        run: |
+          fonts="$(fc-list :lang=ja family)"
+          if [ -z "$fonts" ]; then
+            echo "::error::no installed font covers Japanese; the regional caption tests cannot burn their fixture"
+            exit 1
+          fi
+          echo "$fonts" | sort -u
       - name: Install package and test deps
         run: |
           python -m pip install --upgrade pip
@@ -39,3 +55,41 @@ jobs:
           pip install pytest lxml
       - name: Run the test suite against ffmpeg-skill ${{ matrix.ref }}
         run: python3 scripts/check_vendor_drift.py --ref "${{ matrix.ref }}"
+
+  report:
+    name: report a failed scheduled run
+    needs: check
+    # Only the schedule: nobody is watching it. A run started by hand has someone reading the result.
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # the names of the failed jobs of this run
+      issues: write # open the issue, or comment on the open one
+    steps:
+      - name: Open an issue, or comment on the open one
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: "Scheduled ffmpeg-skill compatibility check is failing"
+        run: |
+          set -euo pipefail
+          failed="$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"')"
+          # One issue at a time: the open issue with exactly this title (pull requests are not issues).
+          number="$(gh api --paginate "repos/$REPO/issues?state=open&per_page=100" \
+            --jq '.[] | select(.pull_request == null and .title == env.TITLE) | .number' | sort -n | sed -n 1p)"
+          if [ -n "$number" ]; then
+            printf 'Failed again: %s\n\n%s\n' "$RUN_URL" "$failed" > body.md
+            gh api -X POST "repos/$REPO/issues/$number/comments" -F body=@body.md --jq '.html_url'
+          else
+            {
+              printf 'The scheduled run of .github/workflows/vendor-drift.yml failed: %s\n\n%s\n\n' "$RUN_URL" "$failed"
+              printf 'To reproduce, with ffmpeg and a Japanese font installed:\n\n'
+              printf '    python3 scripts/check_vendor_drift.py               # ffmpeg-skill main\n'
+              printf '    python3 scripts/check_vendor_drift.py --ref v3.0.0\n\n'
+              printf 'Each later failed scheduled run adds a comment here. Close this issue when the check passes again.\n'
+            } > body.md
+            gh api -X POST "repos/$REPO/issues" -f title="$TITLE" -F body=@body.md --jq '.html_url'
+          fi
