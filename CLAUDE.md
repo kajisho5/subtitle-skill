@@ -242,6 +242,25 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **`render` `fonts_dir`: a burn with the caller's own font files**
+  (`docs/adr/ADR-010-fonts-dir.md`, `src/subtitle_skill/fonts.py`,
+  `tests/test_fonts_dir.py`). For a machine where no installed font covers the
+  subtitle's script: ffmpeg-skill refuses that burn, and a request had no way
+  to say where a font is. `fonts_dir` is a workspace directory (PathPolicy,
+  `resolve_input_dir`). **`caption --fonts-dir` alone burns empty boxes and
+  reports `completed`** (libass does not fall back to the directory's files;
+  measured on 2.24.0, 3.0.0, 3.3.0), so `fonts.py` reads the family and the
+  `cmap` coverage from the font files and the burn names that family
+  (`--font`, and the `Fontname` of this skill's ASS). No `fonts_dir` and a
+  missing-font refusal: the engine's reason is kept and the field is named
+  (`details: {"field": "fonts_dir"}`). A caption tool without the flags is
+  `DEPENDENCY_ERROR`. **Contract changed** (`operations.render` description /
+  inputs / outputs, `parameters.render`, `capabilities.fonts_dir`): re-pin
+  needed. `ci.yml` gained the `real-engine` job (Ubuntu, ffmpeg,
+  fonts-noto-cjk): before it, no pull request ran a single burn or mux test
+  (the OS matrix has no ffmpeg, 46 tests skipped). Not done: an explicit
+  family override, and a real-engine check on macOS / Windows.
+
 - **Shorts captions** (ECOSYSTEM_ROADMAP step 11, `docs/adr/ADR-009-shorts-captions.md`,
   `src/subtitle_skill/shorts.py`, `formats.ass.generate_shorts_ass`). `render`
   `caption_profile: "shorts"` (burn, vertical video) needs `cue.words`; one- or
@@ -418,7 +437,9 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 262+ tests, `pytest -q`, all passing; CI green on
-Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs, `.github/workflows/ci.yml`).
+At last update: 379 tests, `pytest -q`, all passing with ffmpeg and a Japanese
+font installed; CI green on Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs,
+which have no ffmpeg and skip the burn and mux tests) plus the `real-engine`
+job that runs them (`.github/workflows/ci.yml`).
 Re-run `pytest -q` yourself before relying on this — it is a snapshot,
 not a promise.

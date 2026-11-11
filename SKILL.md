@@ -218,6 +218,19 @@ can omit `constraints` entirely.
     With `placement` a chunk moves to the top of the safe zone while a face
     is under it. The response's `caption_profile.cues` lists the cues drawn.
 
+  - `fonts_dir` (optional, `mode: "burn"` only; `docs/adr/ADR-010-fonts-dir.md`):
+    a directory inside the workspace holding font files (`.ttf`, `.otf`,
+    `.ttc`). Set it when the machine has no installed font for the
+    subtitle's script and you cannot install one: copy a font that covers
+    the text into the workspace and give its directory. The family that has
+    the most of the subtitle's characters is read from those files and
+    named to ffmpeg-skill together with the directory. The response's
+    `fonts_dir` gives `{path, family, files}`. A directory with no font for
+    the text is `INVALID_INPUT`; a `FONT_GLYPHS_MISSING` observation lists
+    characters the family lacks. An absolute path, `..` or a path outside
+    the workspace is `PATH_NOT_ALLOWED`. An ffmpeg-skill whose caption tool
+    takes no fonts directory is `DEPENDENCY_ERROR`.
+
 ## `translate` and `mux`
 
 - **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`/`ttml`/`ebu-tt-d`),
@@ -283,7 +296,12 @@ Every failure is a JSON envelope: `{"status": "error", "error": {"code",
 `contract --json`'s `errors.codes`. Check `retryable` before deciding
 whether to retry as-is — `VALIDATION_ERROR`/`INVALID_TIME_RANGE`/
 `PATH_NOT_ALLOWED`/etc. will fail identically on retry (fix the request);
-a `DEPENDENCY_ERROR` talking to ffmpeg-skill may be transient. Never
+a `DEPENDENCY_ERROR` talking to ffmpeg-skill may be transient. An
+`INVALID_INPUT` from `render` whose message says `no installed font
+covers ... text` and whose `details` is `{"field": "fonts_dir"}` means
+the machine has no font for the subtitle's script: put a font file that
+covers it in a workspace directory and send the request again with
+`fonts_dir` (or install a font). Do not retry it unchanged. Never
 retry a failed request by loosening subtitle-skill's own validation —
 if a cue is genuinely invalid (negative start, duplicate id, ...), that
 is a bug in whatever built the `SubtitleDocument`, not something to paper

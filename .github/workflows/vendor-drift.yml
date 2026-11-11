@@ -13,6 +13,8 @@ name: ffmpeg-skill compatibility check
 # captions, and ffmpeg-skill 3.x refuses to burn text that no installed font
 # covers (it fails the job instead of drawing empty boxes). ubuntu-latest has
 # no CJK font, so the font is installed below and checked before the tests.
+# tests/test_fonts_dir.py copies that font file into a fonts directory and burns
+# from it under a fontconfig that knows no Japanese font (request.fonts_dir).
 #
 # A failed scheduled run opens an issue in this repository, or comments on
 # the open one (the `report` job). A run started by hand does not.
@@ -38,8 +40,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - name: Install ffmpeg and a Japanese font
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fontconfig fonts-noto-cjk
+      - name: Install ffmpeg, a Latin font and a Japanese font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fontconfig fonts-dejavu-core fonts-noto-cjk
       - name: Check that a font covers Japanese
         run: |
           fonts="$(fc-list :lang=ja family)"
@@ -54,6 +56,9 @@ jobs:
           pip install -e .
           pip install pytest lxml
       - name: Run the test suite against ffmpeg-skill ${{ matrix.ref }}
+        env:
+          # tests/test_fonts_dir.py's burn from a fonts directory must run here, not skip
+          SUBTITLE_SKILL_REQUIRE_REAL_ENGINE: "1"
         run: python3 scripts/check_vendor_drift.py --ref "${{ matrix.ref }}"
 
   report:

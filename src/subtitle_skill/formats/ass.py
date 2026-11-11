@@ -67,6 +67,17 @@ def font_for(language: str) -> str:
     return _FONT_BY_LANGUAGE.get(language.split("-", 1)[0].lower(), DEFAULT_FONT)
 
 
+def _style_font(font: Optional[str], language: str) -> str:
+    """The Fontname of the one style: `font` (the family `render` read from the
+    caller's `fonts_dir`) or the family for the language. A style line is comma
+    separated, so a family with a comma or a line break cannot be named."""
+    if font is None:
+        return font_for(language)
+    if not isinstance(font, str) or not font.strip() or any(ch in font for ch in ",\r\n"):
+        raise SubtitleSkillError("INVALID_INPUT", f"font family cannot be named in an ASS style: {font!r}")
+    return font.strip()
+
+
 def _scaled(points: float, height: int) -> int:
     return max(1, round(points * height / SCRIPT_HEIGHT))
 
@@ -154,6 +165,7 @@ def generate_ass(
     height: int,
     positions: Optional[Mapping[str, str]] = None,
     style: Optional[SubtitleStyle] = None,
+    font: Optional[str] = None,
 ) -> str:
     """The document as one ASS script for a `width` x `height` video.
 
@@ -191,7 +203,7 @@ def generate_ass(
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,{font_for(document.language)},{font_size},{ass_color(color)},{ass_color(color)},"
+        f"Style: Default,{_style_font(font, document.language)},{font_size},{ass_color(color)},{ass_color(color)},"
         f"{ass_color(DEFAULT_OUTLINE_COLOR)},{ass_color(DEFAULT_OUTLINE_COLOR, alpha=0x80)},"
         f"{-1 if bold else 0},0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1",
         "",
@@ -218,7 +230,7 @@ def generate_ass(
 
 
 def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
-                        positions: Optional[Mapping[str, str]] = None) -> str:
+                        positions: Optional[Mapping[str, str]] = None, font: Optional[str] = None) -> str:
     """The `shorts` caption profile (roadmap step 11, ADR-009) as ASS: one event per
     one-or-two-word cue, bold, large, at a fixed `\\\\pos` inside the 9:16 safe zone
     (`shorts.ShortsLayout`), drawn smaller when it would not fit the safe width."""
@@ -244,7 +256,7 @@ def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,{font_for(document.language)},{layout.font_size},{ass_color(None)},{ass_color(None)},"
+        f"Style: Default,{_style_font(font, document.language)},{layout.font_size},{ass_color(None)},{ass_color(None)},"
         f"{ass_color(DEFAULT_OUTLINE_COLOR)},{ass_color(DEFAULT_OUTLINE_COLOR, alpha=0x80)},"
         f"-1,0,0,0,100,100,0,0,1,{outline},0,2,0,0,0,1",
         "",
