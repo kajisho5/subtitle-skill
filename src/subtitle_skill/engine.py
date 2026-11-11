@@ -179,6 +179,30 @@ def _caption_takes_overwrite(root: Path) -> bool:
     return False
 
 
+#: How ffmpeg-skill's caption tool words its refusal to burn text no installed
+#: font covers (`_common/fonts.py`, read at 2.24.0, 3.0.0, 3.2.3 and 3.3.0:
+#: "no installed font covers Japanese text on this machine -- ..."). Matched
+#: on the stable start of that sentence only.
+FONT_REFUSAL_MARKER = "no installed font covers"
+
+#: What a caller is told to do about that refusal (appended to the engine's
+#: own reason, which is kept). Short, with the field first: a known consumer
+#: keeps the first 500 characters of an error message, and the engine's own
+#: sentence is about 330 of them.
+FONTS_DIR_HINT = (
+    "Or set request.fonts_dir to a workspace directory holding a font file (.ttf/.otf/.ttc) that covers the text"
+)
+
+
+def caption_takes_fonts_dir(root: Path) -> bool:
+    """`caption.py --fonts-dir DIR` and `--font FAMILY`: both are needed to draw
+    with a caller's own font file (see `burn_in`). Present at ffmpeg-skill
+    1.0.0, 2.24.0, 3.0.0, 3.2.3 and 3.3.0 (read at each); a caption tool
+    without them cannot be told where the fonts are."""
+    source = _caption_source(root)
+    return '"--fonts-dir"' in source and '"--font"' in source
+
+
 def _looks_like_ffmpeg_skill(root: Path) -> bool:
     return (root / "scripts" / "caption.py").is_file() and bool(_common_sources(root))
 
@@ -456,9 +480,26 @@ def burn_in(
     audio_stream: Optional[int] = None,
     language: Optional[str] = None,
     style: Optional[SubtitleStyle] = None,
+    fonts_dir: Optional[Path] = None,
+    font_family: Optional[str] = None,
     timeout_seconds: int = 600,
 ) -> dict:
     """Delegate subtitle burn-in (or soft-mux) to ffmpeg-skill's `caption` tool.
+
+    `fonts_dir` with `font_family` (burn only, both or neither;
+    docs/adr/ADR-010-fonts-dir.md) draws the captions with the caller's own
+    font files: `--fonts-dir DIR --font FAMILY`. The directory alone is not
+    enough -- measured against caption.py 2.24.0, 3.0.0 and 3.3.0 on a machine
+    with no Japanese font: with only `--fonts-dir`, libass keeps the default
+    family, finds no glyph (it does not fall back to the directory's files) and
+    burns empty boxes while caption.py reports `completed`. With the family
+    named, libass takes it from the directory. `--font` also goes with an ASS
+    file, whose own style already names the family: there it only tells
+    caption.py that the font is the caller's choice, so its installed-font
+    check does not refuse the burn. A caption tool without the two flags is a
+    DEPENDENCY_ERROR. When caption.py refuses a burn because no installed font
+    covers the text and no `fonts_dir` was given, its reason is kept and
+    `FONTS_DIR_HINT` is added.
 
     Only `srt` is accepted: ffmpeg-skill's `caption.py` burns SRT or ASS
     files, never WebVTT (`--srt` / `--ass`; there is no `--vtt`), confirmed
@@ -532,12 +573,26 @@ def burn_in(
     if style is not None and not isinstance(style, SubtitleStyle):
         raise SubtitleSkillError("INVALID_INPUT", f"style must be a SubtitleStyle or None, got {type(style).__name__}")
 
+    if (fonts_dir is None) != (font_family is None):
+        raise SubtitleSkillError("INVALID_INPUT", "fonts_dir and font_family go together")
+    if fonts_dir is not None:
+        if mode != "burn":
+            raise SubtitleSkillError("INVALID_INPUT", "fonts_dir is for burned captions (mode 'burn')")
+        if not isinstance(font_family, str) or not font_family.strip():
+            raise SubtitleSkillError("INVALID_INPUT", f"font_family must be a non-empty string, got {font_family!r}")
+
     root = resolve_ffmpeg_skill_root()
     if root is None:
         raise SubtitleSkillError(
             "DEPENDENCY_ERROR",
             f"ffmpeg-skill install not found (checked {FFMPEG_SKILL_DIR_ENV} and the standard "
             "~/.claude, ~/.cursor, ~/.codex and ./.claude skills directories)",
+        )
+    if fonts_dir is not None and not caption_takes_fonts_dir(root):
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            "the installed ffmpeg-skill caption tool takes no fonts directory (it has no --fonts-dir / --font); "
+            "fonts_dir needs a later ffmpeg-skill",
         )
 
     input_probe = probe(root, video_path, timeout_seconds=timeout_seconds)
@@ -557,13 +612,23 @@ def burn_in(
         argv += ["--language", language]
     if mode == "burn" and style is not None:
         argv += _style_argv(style)
+    if fonts_dir is not None:
+        argv += ["--fonts-dir", str(fonts_dir), "--font", font_family]
 
-    response = _run_tool(
-        root,
-        "caption",
-        argv,
-        timeout_seconds=timeout_seconds,
-    )
+    try:
+        response = _run_tool(
+            root,
+            "caption",
+            argv,
+            timeout_seconds=timeout_seconds,
+        )
+    except SubtitleSkillError as exc:
+        if fonts_dir is None and mode == "burn" and FONT_REFUSAL_MARKER in exc.message:
+            # the engine's own reason first, then the way out this skill offers
+            raise SubtitleSkillError(
+                exc.code, f"{exc.message}. {FONTS_DIR_HINT}.", details={"field": "fonts_dir"}
+            ) from exc
+        raise
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise SubtitleSkillError("OUTPUT_ERROR", "ffmpeg-skill/caption reported success but output is missing/empty")

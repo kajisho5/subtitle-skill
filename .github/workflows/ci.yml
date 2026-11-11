@@ -36,3 +36,35 @@ jobs:
           pip install pytest lxml
       - name: Run tests
         run: pytest -q
+
+  real-engine:
+    # The matrix above has no ffmpeg, so every test that burns or muxes skips there. This job runs the whole
+    # suite with ffmpeg against the vendored ffmpeg-skill, and a Japanese font to copy from: tests/test_fonts_dir.py
+    # burns Japanese text from a fonts directory under a fontconfig that has no Japanese font.
+    # SUBTITLE_SKILL_REQUIRE_REAL_ENGINE=1 turns that test's "skipped: no ffmpeg / no font" into a failure here.
+    name: test (real ffmpeg, vendored ffmpeg-skill)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install ffmpeg, fontconfig, a Latin font and a Japanese font
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fontconfig fonts-dejavu-core fonts-noto-cjk
+      - name: Check that a font covers Japanese
+        run: |
+          fonts="$(fc-list :lang=ja family)"
+          if [ -z "$fonts" ]; then
+            echo "::error::no installed font covers Japanese; the fonts directory test has no font file to copy"
+            exit 1
+          fi
+          echo "$fonts" | sort -u
+      - name: Install package and test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest lxml
+      - name: Run tests
+        env:
+          SUBTITLE_SKILL_REQUIRE_REAL_ENGINE: "1"
+        run: pytest -q -rs

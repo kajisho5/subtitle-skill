@@ -111,7 +111,13 @@ def build_contract() -> dict:
                     "`style.vertical` is not burned (UNSUPPORTED_FORMAT). `caption_profile: \"shorts\"` "
                     "(docs/adr/ADR-009-shorts-captions.md; burn, vertical video) splits the cues into one- or "
                     "two-word cues from `cue.words` and burns them in large type inside the safe zone shared "
-                    "by TikTok, YouTube Shorts and Instagram Reels, avoiding faces with `placement`."
+                    "by TikTok, YouTube Shorts and Instagram Reels, avoiding faces with `placement`. `fonts_dir` "
+                    "(docs/adr/ADR-010-fonts-dir.md; burn only) is a directory inside the workspace with the "
+                    "caller's own font files (.ttf, .otf, .ttc), for a machine where no installed font covers the "
+                    "subtitle's script: the family that has the most of the text is read from those files and "
+                    "named to ffmpeg-skill `caption --fonts-dir --font`; the response's `fonts_dir` records the "
+                    "path as given, the family and its files. Without it, a burn that ffmpeg-skill refuses for a "
+                    "missing font fails with that reason and a pointer to this field."
                 ),
                 "inputs": [
                     "video_input",
@@ -124,10 +130,11 @@ def build_contract() -> dict:
                     "placement?",
                     "regional_profile?",
                     "caption_profile?",
+                    "fonts_dir?",
                 ],
                 "outputs": [
                     "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
-                    "regional_profile?", "caption_profile?",
+                    "regional_profile?", "caption_profile?", "fonts_dir?",
                 ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
@@ -226,6 +233,7 @@ def build_contract() -> dict:
             "regional_profiles": sorted(REGIONAL_PROFILES),
             "caption_profiles": ["shorts"],
             "ruby": True,
+            "fonts_dir": True,
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -250,7 +258,7 @@ def build_contract() -> dict:
                 },
             },
             "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
-            "render": ["mode", "audio_stream", "placement", "regional_profile", "caption_profile"],
+            "render": ["mode", "audio_stream", "placement", "regional_profile", "caption_profile", "fonts_dir"],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],
         },

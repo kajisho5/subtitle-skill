@@ -64,6 +64,14 @@ class PathPolicy:
         self._require_within_root(resolved, relative_path)
         return resolved
 
+    def resolve_input_dir(self, relative_path: str) -> Path:
+        """An input that is a directory (`fonts_dir`): the same rules as an
+        input file, and it has to be a directory."""
+        resolved = self.resolve_input(relative_path)
+        if not resolved.is_dir():
+            raise SubtitleSkillError("INVALID_INPUT", f"not a directory: {relative_path!r}")
+        return resolved
+
     def resolve_output(self, relative_path: str) -> Path:
         _reject_traversal(relative_path)
         candidate = self.root / relative_path

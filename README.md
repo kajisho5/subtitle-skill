@@ -241,6 +241,32 @@ left 5 %, right 14 %, from ffmpeg-skill's platform table). With `placement`, a c
 moves to the top of the safe zone while a face is under it
 ([ADR-009](docs/adr/ADR-009-shorts-captions.md)).
 
+### Burning on a machine without the font (`render` `fonts_dir`)
+
+ffmpeg-skill refuses to burn text that no installed font covers, instead of
+writing empty boxes. On a machine you cannot install fonts on (a venue PC, a
+container), put a font file in the workspace and name its directory
+([ADR-010](docs/adr/ADR-010-fonts-dir.md)):
+
+```json
+"fonts_dir": "fonts"
+```
+
+`fonts_dir` is a directory inside the workspace holding `.ttf` / `.otf` / `.ttc`
+files (`mode: "burn"` only). subtitle-skill reads the family names and character
+coverage from those files, names the family that has the most of the subtitle's
+text, and passes both to `caption --fonts-dir --font` (the directory alone does
+not make libass draw with it). The response's `fonts_dir` records the path as
+given, the family and its files. A directory with no font for the text is
+`INVALID_INPUT`; a character the family lacks is a `FONT_GLYPHS_MISSING`
+observation. Without `fonts_dir`, the missing-font failure keeps ffmpeg-skill's
+reason and adds which field to set:
+
+```
+ffmpeg-skill/caption failed (input): no installed font covers Japanese text on this machine — ... .
+Or set request.fonts_dir to a workspace directory holding a font file (.ttf/.otf/.ttc) that covers the text.
+```
+
 ### Ruby, vertical text and regional profiles
 
 Cues can carry ruby (`"ruby": [{"base": "字幕", "text": "じまく"}]`) and
@@ -497,7 +523,9 @@ non-empty string, never `null`, since a known consumer treats a falsy
 `engine_version` on a render response as invalid rather than retryable),
 `engine_script_sha256` (the real identity anchor, above), and
 `engine_response` (ffmpeg-skill's own reported `commands` and `probe` —
-always its actual values, never fabricated here).
+always its actual values, never fabricated here). A burn with `fonts_dir`
+also records `fonts_dir`: the path as the request gave it, the family named
+and the files that carry it — never a font's bytes.
 
 ### Security
 
@@ -634,15 +662,16 @@ wanted, belongs to whoever is driving the render.
 | **148 / 148** | full test suite — models, validation, formats, security, `PathPolicy`, CLI/contract, doctor, the Agent Skill installer, engine boundaries, `SubtitleStyle` → caption.py wiring, and render delegation (burn and mux) |
 | **against real ffmpeg-skill** | render and mux tests run a vendored, byte-identical copy of ffmpeg-skill's actual `caption.py` / `probe.py` / `_common/` / `_contract.py` and the two helpers `caption.py` imports (kajisho5/ffmpeg-skill, skill version 2.24.0) — not a hand-rolled stub — including a real burn-in, a real mux and a real two-language mux (`.mkv` and `.mp4`), each verified by `ffprobe`, and by asserting ffmpeg-skill's own reported command line used the right flags (`subtitles=` for burn, `--mode mux` / `--audio-stream N` / `--language` for mux, `--color`/`--bold`/`--size` for styled burns) |
 | **ffmpeg-skill compatibility checked daily** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main, and the v3.0.0 tag, and runs the test suite against each, separately from normal-PR CI (ffmpeg-skill 3.x needs Python 3.10+ and FFmpeg 6.1+; the `>=1.0` contract_version range already admits its `contract_version` 2.0); a new release fails it only if subtitle-skill actually breaks |
-| **6 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11 |
+| **7 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11, plus one Ubuntu job with ffmpeg and a Japanese font that runs every burn and mux test against the vendored ffmpeg-skill |
+| **burn from a fonts directory** | under a fontconfig with no Japanese font, a Japanese burn without `fonts_dir` fails with the engine's reason and the field to set; with a font file in `fonts_dir` it draws the text (two different captions give different frames, which empty boxes do not), through the SRT and the ASS path |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 
 ```bash
 pytest -q
 ```
 
-Only the Linux CI job is guaranteed to have `ffmpeg` on `PATH`; the
-real-burn-in tests `skip` gracefully elsewhere, so "CI green" means
+Only the `real-engine` CI job (Ubuntu) has `ffmpeg` on `PATH`; the
+real-burn-in tests `skip` in the OS matrix, so "CI green" means
 "logic verified everywhere," not "burn-in verified identically on every
 OS."
 
@@ -677,7 +706,8 @@ pytest -q
 ```
 
 CI (`.github/workflows/ci.yml`) runs on Ubuntu, macOS, and Windows, on
-Python 3.9 and 3.11 (6 jobs). `PathPolicy` behavior is consistent across
+Python 3.9 and 3.11 (6 jobs), and once more on Ubuntu with ffmpeg and a
+Japanese font installed (`real-engine`), where the burn and mux tests run. `PathPolicy` behavior is consistent across
 all three OSes.
 
 ## Docs
@@ -688,7 +718,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope

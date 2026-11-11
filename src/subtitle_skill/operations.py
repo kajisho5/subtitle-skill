@@ -332,6 +332,15 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             raise SubtitleSkillError("INVALID_INPUT", f"caption_profile must be 'shorts', got {caption_profile!r}")
         if mode != "burn":
             raise SubtitleSkillError("INVALID_INPUT", "caption_profile 'shorts' is for burned captions (mode 'burn')")
+    # request.fonts_dir (docs/adr/ADR-010-fonts-dir.md): a directory inside the
+    # workspace with the caller's own font files, for a machine where no installed
+    # font covers the subtitle's script. Burn only: a soft track is drawn by the player.
+    fonts_dir_rel = request.get("fonts_dir")
+    if fonts_dir_rel is not None:
+        if not isinstance(fonts_dir_rel, str) or not fonts_dir_rel:
+            raise SubtitleSkillError("INVALID_INPUT", "request.fonts_dir must be a non-empty path inside the workspace")
+        if mode != "burn":
+            raise SubtitleSkillError("INVALID_INPUT", "fonts_dir is for burned captions (mode 'burn')")
     use_ass = mode == "burn" and (
         request.get("placement") is not None
         or regional is not None
@@ -362,6 +371,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     video_path = policy.resolve_input(video_input_rel)
     video_sha256 = sha256_file(video_path)
     output_path = policy.resolve_output(output_path_rel)
+    fonts_dir_path = policy.resolve_input_dir(fonts_dir_rel) if fonts_dir_rel is not None else None
 
     # request.video_duration is an optional, caller-supplied hint used by
     # the generic validation in execute(); it may be absent or wrong. For
@@ -377,9 +387,44 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             f"ffmpeg-skill install not found (checked {engine_module.FFMPEG_SKILL_DIR_ENV} and the standard "
             "~/.claude, ~/.cursor, ~/.codex and ./.claude skills directories)",
         )
+    if fonts_dir_path is not None and not engine_module.caption_takes_fonts_dir(ffmpeg_skill_root):
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            "the installed ffmpeg-skill caption tool takes no fonts directory (it has no --fonts-dir / --font); "
+            "fonts_dir needs a later ffmpeg-skill",
+        )
     video_probe = engine_module.probe(ffmpeg_skill_root, video_path)
     real_video_duration = video_probe.get("duration")
     issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
+
+    # The family the burn names, read from the font files themselves: the directory
+    # alone does not make libass draw with them (fonts.py). A character the family
+    # lacks is reported, never hidden.
+    font_choice = None
+    fonts_digest = None
+    if fonts_dir_path is not None:
+        from . import fonts as fonts_module
+        from .formats.ass import font_for
+
+        texts = [c.text for c in document.cues] + [r.text for c in document.cues for r in (c.ruby or ())]
+        font_choice = fonts_module.choose(
+            fonts_module.scan(fonts_dir_path),
+            fonts_module.text_characters(texts),
+            preferred=font_for(document.language),
+        )
+        fonts_digest = fonts_module.digest(fonts_dir_path)
+        if font_choice.missing:
+            shown = "".join(font_choice.missing[:20])
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "FONT_GLYPHS_MISSING",
+                    None,
+                    f"the font family {font_choice.family!r} from fonts_dir has no glyph for {len(font_choice.missing)} "
+                    f"character(s) of this subtitle ({shown!r}); they are drawn from an installed font when one has "
+                    "them and as empty boxes otherwise",
+                )
+            )
 
     video_info = video_probe.get("video") or {}
     width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
@@ -450,6 +495,13 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                     else {}
                 ),
                 **({"caption_profile": caption_profile} if caption_profile is not None else {}),
+                # the family named and the bytes of every font file libass may draw from;
+                # the directory's own path is not part of what was drawn
+                **(
+                    {"fonts": {"family": font_choice.family, "sha256": fonts_digest}}
+                    if font_choice is not None
+                    else {}
+                ),
             },
         ),
     )
@@ -491,11 +543,14 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         from .formats.ass import generate_ass, generate_shorts_ass
 
         positions = placement_plan.positions if placement_plan is not None else None
+        font = font_choice.family if font_choice is not None else None
         if shorts_document is not None:
-            subtitle_content = generate_shorts_ass(shorts_document, width=width, height=height, positions=positions)
+            subtitle_content = generate_shorts_ass(
+                shorts_document, width=width, height=height, positions=positions, font=font
+            )
         else:
             subtitle_content = generate_ass(
-                document, width=width, height=height, positions=positions, style=effective_style
+                document, width=width, height=height, positions=positions, style=effective_style, font=font
             )
         burn_format, burn_style = "ass", None
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
@@ -518,6 +573,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             # The document-wide color/bold/size reduction computed above
             # (None for mode="mux", or when no cue set any of the three).
             style=burn_style,
+            fonts_dir=fonts_dir_path,
+            font_family=font_choice.family if font_choice is not None else None,
         )
     finally:
         subtitle_tmp_path.unlink(missing_ok=True)
@@ -545,6 +602,13 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     }
     if placement_plan is not None:
         record["placement"] = placement_plan.to_dict()
+    if font_choice is not None:
+        # the path as the request gave it, and what was read from it; never a file's bytes
+        record["fonts_dir"] = {
+            "path": fonts_dir_rel,
+            "family": font_choice.family,
+            "files": list(font_choice.files),
+        }
     if regional is not None:
         record["regional_profile"] = regional
     if shorts_document is not None:
@@ -612,6 +676,8 @@ def _finish(
         response["mode"] = mode
     if record.get("placement") is not None:
         response["placement"] = record["placement"]
+    if record.get("fonts_dir") is not None:
+        response["fonts_dir"] = record["fonts_dir"]
     if record.get("conformance") is not None:
         response["conformance"] = record["conformance"]
     if record.get("regional_profile") is not None:
