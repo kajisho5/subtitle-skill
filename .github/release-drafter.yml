@@ -40,6 +40,9 @@ version-resolver:
 # never removed after the title is edited -- the version-resolver would then cut a major
 # release on merge. A maintainer applies `major` by hand when a change is actually
 # breaking; only that label feeds the major bump.
+# Dependabot applies `major` / `minor` on its own to a pull request whose dependency moved a major /
+# minor version; release.yml removes a release-level label a bot put on a Dependabot pull request
+# before it resolves the version (scripts/dependabot_release_labels.py).
 autolabeler:
   - label: "feature"
     title:
