@@ -1,3 +1,7 @@
+## v0.8.1 - 2026-11-11
+
+- ci: stop running CI twice per pull request commit (#33) (ebf5014)
+
 ## v0.8.0 - 2026-11-06
 
 - feat(render): shorts captions for vertical clips (roadmap step 11) (#32) (b243cf3)
