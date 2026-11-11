@@ -95,7 +95,8 @@ unrelated stream-preservation fixes. **This jump skipped three
 intermediate feature releases** (0.10.0-0.12.1) that went unnoticed
 between sessions — the exact failure mode the old text of this section
 predicted ("vendor-drift.yml is weekly... does not open an issue or PR
-by itself yet", still true, see Known gaps below). Pin history:
+by itself yet"; since then a failed scheduled run opens an issue, see
+Known gaps below). Pin history:
 `2abd89c` (v0.9.1) → `b51dc5e` (v0.9.2, `_contract.py`-only drift) →
 `336e0c4d` (v0.12.2, `caption.py`+`_common.py` drift, this session). Do
 not assume it is still byte-identical by the time you read this either
@@ -211,8 +212,12 @@ Ordered by value, not urgency:
    fixed automatically** — `vendor-drift.yml` now runs the whole test suite
    against ffmpeg-skill main every day and fails only when subtitle-skill
    actually breaks (a plain new release passes). A real break still needs
-   someone to fix `subtitle_skill.engine`; the workflow does not open an
-   issue or PR by itself.
+   someone to fix `subtitle_skill.engine`. A failed scheduled run opens the
+   issue "Scheduled ffmpeg-skill compatibility check is failing", or
+   comments on it while it is open (the `report` job, `issues: write` on
+   that job only); it does not open a PR. The schedule was red for five
+   days (2026-11-06 to 2026-11-10) before that job existed, and nobody saw
+   it.
 3. **No SMPTE timecode cue support in `render`** — ffmpeg-skill 0.12.x's
    `caption.py --text` accepts `hh:mm:ss:ff` SMPTE non-drop-frame
    timecode cues (`parse_time(fps=...)`/`fmt_smpte_time()`, closing
@@ -388,6 +393,12 @@ Ordered by value, not urgency:
   the full suite passes against it. The dependency stays `>=1.0` of
   `contract_version` (3.0.0 reports `2.0`), with no upper bound (ADR-003).
   `ci.yml` keeps Python 3.9 on the vendored 2.x copy.
+  The workflow installs `fonts-noto-cjk` and checks `fc-list :lang=ja`
+  before the tests: ffmpeg-skill 3.x refuses to burn text that no installed
+  font covers, `tests/test_regional.py` (0.7.0) burns Japanese captions, and
+  `ubuntu-latest` has no CJK font. That, not a change in ffmpeg-skill, made
+  every scheduled run fail from 2026-11-06 (both `main` and `v3.0.0`). A
+  test that burns another script needs its font added there too.
 
 ## Things intentionally NOT done, and why
 
