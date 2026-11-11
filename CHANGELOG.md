@@ -1,3 +1,7 @@
+## v0.8.2 - 2026-11-11
+
+- ci: fix the scheduled ffmpeg-skill compatibility check and report its failures (#34) (8a5f28b)
+
 ## v0.8.1 - 2026-11-11
 
 - ci: stop running CI twice per pull request commit (#33) (ebf5014)
