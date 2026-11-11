@@ -397,6 +397,23 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     real_video_duration = video_probe.get("duration")
     issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
 
+    video_info = video_probe.get("video") or {}
+    width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
+    if video_info.get("rotation") in (90, -90, 270, -270):
+        width, height = height, width
+
+    shorts_document = None
+    shorts_layout = None
+    if caption_profile == "shorts":
+        from .shorts import ShortsLayout, chunk_document
+
+        if not (height > width > 0):
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"caption_profile 'shorts' is for vertical video; this one is {width}x{height}"
+            )
+        shorts_document = chunk_document(document)
+        shorts_layout = ShortsLayout(width, height)
+
     # The family the burn names, read from the font files themselves: the directory
     # alone does not make libass draw with them (fonts.py). A character the family
     # lacks is reported, never hidden.
@@ -404,9 +421,13 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     fonts_digest = None
     if fonts_dir_path is not None:
         from . import fonts as fonts_module
+        from .formats._text import display_segments
         from .formats.ass import font_for
 
-        texts = [c.text for c in document.cues] + [r.text for c in document.cues for r in (c.ruby or ())]
+        # what is drawn: each cue's text with its speaker prefix, and its ruby readings
+        # (a regional profile or the shorts profile may already have dropped the prefix)
+        drawn = (shorts_document or document).cues
+        texts = [part for c in drawn for seg, reading in display_segments(c) for part in (seg, reading) if part]
         font_choice = fonts_module.choose(
             fonts_module.scan(fonts_dir_path),
             fonts_module.text_characters(texts),
@@ -425,23 +446,6 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                     "them and as empty boxes otherwise",
                 )
             )
-
-    video_info = video_probe.get("video") or {}
-    width, height = int(video_info.get("width") or 0), int(video_info.get("height") or 0)
-    if video_info.get("rotation") in (90, -90, 270, -270):
-        width, height = height, width
-
-    shorts_document = None
-    shorts_layout = None
-    if caption_profile == "shorts":
-        from .shorts import ShortsLayout, chunk_document
-
-        if not (height > width > 0):
-            raise SubtitleSkillError(
-                "INVALID_INPUT", f"caption_profile 'shorts' is for vertical video; this one is {width}x{height}"
-            )
-        shorts_document = chunk_document(document)
-        shorts_layout = ShortsLayout(width, height)
 
     placement_plan = None
     if placement_spec is not None:

@@ -340,6 +340,22 @@ def test_a_character_the_family_lacks_is_reported(tmp_path, fake_engine):
     assert "\u5b57\u5e55" in issue["message"] and "Example Kana" in issue["message"]
 
 
+def test_a_speaker_name_is_part_of_the_text_the_font_has_to_draw(tmp_path, fake_engine):
+    # the name is drawn in front of the cue ("Name: text"), so the family is asked for it too
+    ws = _workspace(tmp_path)
+    _write_font(ws / "fonts" / "ja.ttf", "Example Gothic", JA_RANGES)
+    request = _request(ws, fonts_dir="fonts")
+    request["subtitle"]["cues"][0]["speaker"] = "\uae40"  # a Hangul name the family does not have
+    (issue,) = execute(request)["observation"]
+    assert issue["code"] == "FONT_GLYPHS_MISSING" and "\uae40" in issue["message"]
+
+    # a regional profile that tells speakers apart by colour draws no name: nothing is asked for it
+    request = _request(ws, fonts_dir="fonts", regional_profile="ja-broadcast", output_path="regional.mp4")
+    request["subtitle"]["cues"][0]["speaker"] = "\uae40"
+    response = execute(request)
+    assert [o for o in response["observation"] if o["code"] == "FONT_GLYPHS_MISSING"] == []
+
+
 @pytest.mark.parametrize(
     "value, code",
     [

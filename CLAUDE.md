@@ -437,7 +437,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 378 tests, `pytest -q`, all passing with ffmpeg and a Japanese
+At last update: 379 tests, `pytest -q`, all passing with ffmpeg and a Japanese
 font installed; CI green on Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs,
 which have no ffmpeg and skip the burn and mux tests) plus the `real-engine`
 job that runs them (`.github/workflows/ci.yml`).
