@@ -1,3 +1,7 @@
+## v0.9.0 - 2026-11-11
+
+- feat(render): fonts_dir, a burn with the caller's own font files (#35) (eef35c7)
+
 ## v0.8.2 - 2026-11-11
 
 - ci: fix the scheduled ffmpeg-skill compatibility check and report its failures (#34) (8a5f28b)
