@@ -1,3 +1,7 @@
+## v0.9.1 - 2026-11-11
+
+- fix(release): Dependabot labels cannot raise the release level (#36) (f4526eb)
+
 ## v0.9.0 - 2026-11-11
 
 - feat(render): fonts_dir, a burn with the caller's own font files (#35) (eef35c7)
