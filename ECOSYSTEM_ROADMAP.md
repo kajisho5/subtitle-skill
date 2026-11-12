@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-Version single-sourced from `pyproject.toml` (step 1). `generate` (SRT / WebVTT / TTML as IMSC 1.1 Text and EBU-TT-D, with line/cps/duration validation), `render` (burn or mux, SRT; caption placement away from faces, regional profiles, ruby and the `shorts` profile burn through subtitle-skill's ASS), `translate` and `mux` (steps 5-6). CI on 3 OSes x 2 Pythons; burn tests need ffmpeg and run where it is installed.
+v0.9.1, version single-sourced from `pyproject.toml` (step 1). `generate` (SRT / WebVTT / TTML as IMSC 1.1 Text and EBU-TT-D, with line/cps/duration validation), `render` (burn or mux, SRT; caption placement away from faces, regional profiles, ruby and the `shorts` profile burn through subtitle-skill's ASS), `translate` and `mux` (steps 5-6). CI on 3 OSes x 2 Pythons; burn tests need ffmpeg and run where it is installed. Burned captions do not move: `--animate` / `--karaoke` are not passed to ffmpeg-skill `caption` (step 12).
 
 ## What this repository owns
 
@@ -16,11 +16,12 @@ Version single-sourced from `pyproject.toml` (step 1). `generate` (SRT / WebVTT 
 | 字幕生成・検証 | done |  |
 | 字幕焼き込み | done |  |
 | 字幕翻訳 | done | `translate` operation; engine chosen: Argos Translate offline by default, OPUS-MT (CTranslate2) and local Ollama LLM optional, DeepL optional, caller translation memory ([ADR-004](docs/adr/ADR-004-translation-engine.md)) |
+| 動く字幕(字幕キュー由来) | open | added by the [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/pull/156) (O11): everything generated from subtitle cues, animated captions included, is this skill's; step 12. Effects timed to words in a transcript (`Karaoke`, `Emphasis`) are remotion-ffmpeg-skill's `語の時刻に合わせた字幕演出` |
 | ロケール別字幕整形 | done | ja/zh/ko locale profiles: East Asian Width counting, kinsoku observations, per-locale defaults ([ADR-001](docs/adr/ADR-001-locale-profiles.md)) |
 
 ## Wiring
 
-Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.4.1 (video-production-agent#102). Not wired: audio_stream, `translate`, the multi-language `mux` operation (dubbing-skill step 11 needs translate), and everything from steps 8-11 (`placement`, the TTML formats, `regional_profile`, `caption_profile`, cue `ruby`/`words`, `style.vertical`); the contract changed in each of those steps, so the agent's pinned contract must be re-pinned first. Delegates to ffmpeg-skill caption, probe.
+Agent wires generate, render burn and render's mux mode (video-production-agent#81, ADR-063); speaker labels from diarized transcripts reach the cues (video-production-agent#111). Pinned at 0.9.1 today (first at 0.4.1, video-production-agent#102). Not wired: audio_stream, `translate`, the multi-language `mux` operation (dubbing-skill step 11 needs translate), and everything from steps 8-11 (`placement`, the TTML formats, `regional_profile`, `caption_profile`, cue `ruby`/`words`, `style.vertical`); the contract changed in each of those steps; the agent has since re-pinned to 0.9.1, and which of these it now passes is not re-checked here. Delegates to ffmpeg-skill caption, probe.
 
 ## Steps
 
@@ -54,10 +55,14 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
   - なぜ要るか：縦型の切り出しに、読みやすい大きな字幕を自動で載せられる
   - Done when: a 9:16 fixture's cues sit inside the TikTok / Shorts safe zone and never exceed two words
   - Done (ADR-009): `render` `caption_profile: "shorts"` (burn, vertical video) re-cuts cues from `cue.words` into one- or two-word cues, bold at 5.5 % of the height inside the safe zone shared by TikTok / Shorts / Reels (ffmpeg-skill `_platforms.py`), faces avoided with `placement`. `tests/fixtures/shorts/vertical_words_en.json` on 9:16: seven cues, none over two words, every burned cue's pixels inside the safe zone
+- [ ] **12. Animated captions from cues** — `render` (burn) gains `animate: none|fade|pop|slide` and `karaoke: sweep|word`, passed through to ffmpeg-skill `caption --animate` / `--karaoke`, the flags it already has; no animation is drawn here. `karaoke` uses the cue's `words` when present and is refused without them (`INVALID_INPUT`, the field named). A burn that goes through this skill's own ASS (`placement`, `regional_profile`, `ruby`, `caption_profile: shorts`) either carries the animation into that ASS or is refused with the reason, recorded in an ADR, never silently static; a soft track (mux) with an animation is refused, since only a burn can move. The values used are written in the result. [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/pull/156) (O11)
+  - Why: pop-in and karaoke captions for shorts and talks come from the same subtitle document, with no Node or Remotion project（なぜ要るか：同じ字幕データから、Node や Remotion なしで動く字幕を焼き込める）
+  - Needs: nothing new from ffmpeg-skill (existing flags); a contract change, so the agent re-pins before it can pass them
+  - Done when: a fixture burns once per `animate` mode and once with `karaoke`, and decoded frames show the caption absent / partial / full at the expected frames of a cue; `karaoke` without words and `animate` on a mux are refused; a burn with no `animate` sends ffmpeg-skill the same call as today
 
 ## Boundaries
 
-Animated captions also exist in remotion (Captioned/Karaoke); transcription exports SRT/VTT as views. dubbing-skill takes translated cues from `translate` (its step 11).
+Under the [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/pull/156) (O11): animated captions made from subtitle cues are this skill's (step 12); caption effects timed to words in a transcript (remotion-ffmpeg-skill `Captioned --words`, `Karaoke`, `Emphasis`) are remotion-ffmpeg-skill's; single timed text elements (sticker, hook) are motion-graphics-skill's. Transcription exports SRT/VTT as views. dubbing-skill takes translated cues from `translate` (its step 11).
 
 ---
 Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
