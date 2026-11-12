@@ -1,3 +1,7 @@
+## v0.9.2 - 2026-11-12
+
+- docs(roadmap): animated captions from cues (animate, karaoke) through ffmpeg-skill caption (#38) (0805c0e)
+
 ## v0.9.1 - 2026-11-11
 
 - fix(release): Dependabot labels cannot raise the release level (#36) (f4526eb)
