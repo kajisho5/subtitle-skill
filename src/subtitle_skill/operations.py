@@ -312,7 +312,7 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
     if mode != "burn":
         raise SubtitleSkillError(
             "INVALID_INPUT", f"{field} is drawn into the picture: it needs mode 'burn', not a soft track ({mode!r})",
-            details={"field": field},
+            details={"field": field, "conflicts_with": ["mode"]},
         )
     if use_ass:
         through = [
@@ -345,7 +345,13 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
     if karaoke is not None:
         from .formats._text import plain_text
 
-        for index, cue in enumerate(document.cues):
+        # the index in the request as given (execute() has sorted the cues by start)
+        raw_cues = (request.get("subtitle") or {}).get("cues") or []
+        request_index = {
+            raw.get("id"): i for i, raw in enumerate(raw_cues) if isinstance(raw, Mapping) and isinstance(raw.get("id"), str)
+        }
+        for sorted_index, cue in enumerate(document.cues):
+            index = request_index.get(cue.id, sorted_index)
             if not cue.words:
                 raise SubtitleSkillError(
                     "INVALID_INPUT",

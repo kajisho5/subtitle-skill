@@ -555,10 +555,10 @@ def burn_in(
     actually burns, and when its own layout rewrote the cues (a cue extended
     to `--min-duration`, a cue split at `--max-lines`) that is
     `<output stem>_adjusted.srt`, not the SRT given -- so the same words are
-    also written as `<output stem>_adjusted.words.json` when no such file is
-    there already (measured against ffmpeg-skill 2.24.0 and 3.8.3: without it
-    the words are ignored and the highlight splits each cue evenly). Every
-    file written here is removed after the burn. Nothing is sent when neither
+    also written as `<output stem>_adjusted.words.json` (measured against ffmpeg-skill 2.24.0 and 3.8.3: without it
+    the words are ignored and the highlight splits each cue evenly). A side
+    file that already exists is refused (INVALID_INPUT) before anything is
+    written; every file written here is removed after the burn. Nothing is sent when neither
     is set: the argv is the one built before step 12.
 
     `fonts_dir` with `font_family` (burn only, both or neither;
@@ -713,14 +713,26 @@ def burn_in(
     if animated:
         ass_path = subtitle_path.with_suffix(".animated.ass")
         argv += animation_argv(animate, karaoke, ass_path)
+        planned = [ass_path]
+        if karaoke is not None:
+            beside_srt = subtitle_path.with_suffix(".words.json")
+            beside_adjusted = output_path.with_name(output_path.stem + "_adjusted.words.json")
+            planned += [beside_srt, beside_adjusted]
+        # Each side file is this call's own: an existing one is refused rather than
+        # replaced, removed afterwards, or (a .words.json) read by caption.py as this
+        # request's word timings.
+        existing = [str(path) for path in planned if path.exists()]
+        if existing:
+            raise SubtitleSkillError(
+                "INVALID_INPUT",
+                f"an animated burn writes its own side files next to the output, and these already exist: "
+                f"{existing}; move or remove them, or choose another output_path",
+                details={"field": "output_path", "existing": existing},
+            )
         side_files.append(ass_path)
         if karaoke is not None:
             words_doc = json.dumps({"words": list(word_timings)}, ensure_ascii=False)
-            beside_srt = subtitle_path.with_suffix(".words.json")
-            beside_adjusted = output_path.with_name(output_path.stem + "_adjusted.words.json")
             for path in (beside_srt, beside_adjusted):
-                if path.exists():
-                    continue  # never replace (or later remove) a file this call did not write
                 path.write_text(words_doc, encoding="utf-8")
                 side_files.append(path)
 

@@ -210,6 +210,27 @@ def test_karaoke_without_words_is_refused_naming_the_field(tmp_path, ffmpeg_skil
     assert not (tmp_path / "out.mp4").exists()
 
 
+def test_the_missing_words_are_named_by_their_index_in_the_request(tmp_path, ffmpeg_skill_install):
+    later = {**FIXTURE["cues"][0], "id": "2", "start": 2.7, "end": 2.9, "text": "GO",
+             "words": [{"text": "GO", "start": 2.7, "end": 2.9}]}
+    earlier = {k: v for k, v in FIXTURE["cues"][0].items() if k != "words"}
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_request(tmp_path, subtitle={**FIXTURE, "cues": [later, earlier]}, karaoke="sweep"))
+    assert exc.value.details["field"] == "subtitle.cues[1].words"
+
+
+@pytest.mark.parametrize("name", ["out_adjusted.words.json", "out.subtitle-skill-src.words.json",
+                                  "out.subtitle-skill-src.animated.ass"])
+def test_an_existing_side_file_is_refused_and_kept(tmp_path, ffmpeg_skill_install, name):
+    _video(tmp_path / "in.mp4")
+    (tmp_path / name).write_text("theirs", encoding="utf-8")
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_request(tmp_path, karaoke="sweep"))
+    assert exc.value.code == "INVALID_INPUT" and exc.value.details["field"] == "output_path"
+    assert (tmp_path / name).read_text(encoding="utf-8") == "theirs"
+    assert not (tmp_path / "out.mp4").exists()
+
+
 def test_karaoke_words_that_do_not_match_the_drawn_text_are_refused(tmp_path, ffmpeg_skill_install):
     _video(tmp_path / "in.mp4")
     speaker = {**FIXTURE, "cues": [{**FIXTURE["cues"][0], "speaker": "Host"}]}  # "Host:" is drawn too
@@ -224,7 +245,7 @@ def test_an_animation_on_a_soft_track_is_refused(tmp_path, ffmpeg_skill_install,
     with pytest.raises(SubtitleSkillError) as exc:
         execute(_request(tmp_path, mode="mux", output_path="out.mkv", **extra))
     assert exc.value.code == "INVALID_INPUT"
-    assert exc.value.details["field"] == next(iter(extra))
+    assert exc.value.details == {"field": next(iter(extra)), "conflicts_with": ["mode"]}
 
 
 def test_an_animation_through_the_skills_own_ass_is_refused_with_the_reason(tmp_path, ffmpeg_skill_install):
