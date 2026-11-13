@@ -1,3 +1,7 @@
+## v0.10.0 - 2026-11-13
+
+- feat(render): animated captions from cues via ffmpeg-skill caption (roadmap step 12) (#39) (91d2dcf)
+
 ## v0.9.2 - 2026-11-12
 
 - docs(roadmap): animated captions from cues (animate, karaoke) through ffmpeg-skill caption (#38) (0805c0e)
