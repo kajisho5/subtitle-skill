@@ -274,6 +274,109 @@ def _document_wide_style_value(document: SubtitleDocument, field: str):
     return next(iter(seen), None)
 
 
+def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, mode: str, use_ass: bool,
+                     regional) -> Optional[dict]:
+    """`request.animate` / `request.karaoke` (roadmap step 12,
+    docs/adr/ADR-011-animated-captions.md), checked before any video is read.
+
+    Both are passed through to ffmpeg-skill `caption --animate` / `--karaoke
+    --karaoke-style`; nothing is drawn here. None when the burn does not move
+    (neither field, or `animate: "none"` alone), so a static burn sends the
+    call it sent before. Refused, with the field named:
+    - a soft track (`mode: "mux"`): only a burn can move;
+    - a burn through this skill's own ASS (`placement`, `regional_profile`, cue
+      `ruby`, `caption_profile: "shorts"`): caption.py animates only the ASS it
+      generates from an SRT and burns a given ASS as it is, so the animation
+      would be silently dropped (the ADR records why it is not re-drawn here);
+    - `karaoke` on a cue without `words`, or whose drawn text does not split
+      into as many space-separated words as it has `words` (caption.py would
+      then ignore the timings and split the cue evenly);
+    - `animate` with `karaoke: "word"`: caption.py's per-word events make the
+      caption blink out after its first word (see the ADR).
+    """
+    animate = request.get("animate")
+    karaoke = request.get("karaoke")
+    if animate is not None and animate not in engine_module.ANIMATE_MODES:
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"animate must be one of {list(engine_module.ANIMATE_MODES)}, got {animate!r}",
+            details={"field": "animate"},
+        )
+    if karaoke is not None and karaoke not in engine_module.KARAOKE_STYLES:
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"karaoke must be one of {list(engine_module.KARAOKE_STYLES)}, got {karaoke!r}",
+            details={"field": "karaoke"},
+        )
+    if (animate is None or animate == "none") and karaoke is None:
+        return None
+    field = "animate" if animate not in (None, "none") else "karaoke"
+    if mode != "burn":
+        raise SubtitleSkillError(
+            "INVALID_INPUT", f"{field} is drawn into the picture: it needs mode 'burn', not a soft track ({mode!r})",
+            details={"field": field},
+        )
+    if use_ass:
+        through = [
+            name
+            for name, used in (
+                ("placement", request.get("placement") is not None),
+                ("regional_profile", regional is not None),
+                ("caption_profile", request.get("caption_profile") is not None),
+                ("ruby", any(c.ruby for c in document.cues)),
+            )
+            if used
+        ]
+        raise SubtitleSkillError(
+            "INVALID_INPUT",
+            f"{field} cannot be combined with {', '.join(through)}: those burn through subtitle-skill's own ASS, "
+            "which ffmpeg-skill caption burns as it is and does not animate (docs/adr/ADR-011-animated-captions.md)",
+            details={"field": field, "conflicts_with": through},
+        )
+    if karaoke == "word" and animate not in (None, "none"):
+        # measured against ffmpeg-skill 2.24.0 and 3.8.3: caption.py puts the entrance's \\fad on
+        # the cue's first per-word event only, so its fade-OUT runs at the end of the first
+        # word and the whole caption blinks out before the second word (the ADR's engine note)
+        raise SubtitleSkillError(
+            "INVALID_INPUT",
+            "animate cannot be combined with karaoke 'word': ffmpeg-skill caption fades the whole caption out at "
+            "the end of its first word (docs/adr/ADR-011-animated-captions.md); use karaoke 'sweep' with animate, "
+            "or karaoke 'word' alone",
+            details={"field": "animate", "conflicts_with": ["karaoke"]},
+        )
+    if karaoke is not None:
+        from .formats._text import plain_text
+
+        for index, cue in enumerate(document.cues):
+            if not cue.words:
+                raise SubtitleSkillError(
+                    "INVALID_INPUT",
+                    f"karaoke needs word timings: cue {cue.id} has no words",
+                    details={"field": f"subtitle.cues[{index}].words", "cue_id": cue.id},
+                )
+            drawn = plain_text(cue, document.language).split()
+            if len(drawn) != len(cue.words):
+                raise SubtitleSkillError(
+                    "INVALID_INPUT",
+                    f"karaoke: cue {cue.id} is drawn as {len(drawn)} space-separated word(s) but has "
+                    f"{len(cue.words)} words; ffmpeg-skill caption times one word per space-separated word "
+                    "(a speaker prefix or ruby reading counts as words too)",
+                    details={"field": f"subtitle.cues[{index}].words", "cue_id": cue.id},
+                )
+    resolved_animate = animate if animate is not None else "none"
+    return {
+        "animate": resolved_animate,
+        "karaoke": karaoke,
+        "word_timings": "cue.words" if karaoke is not None else None,
+        "engine_flags": engine_module.animation_argv(resolved_animate, karaoke, Path("<ass>"))[:-2],
+    }
+
+
+def _word_timings(document: SubtitleDocument) -> list:
+    """Every cue's `words`, in the shape caption.py reads from a `.words.json`."""
+    return [
+        {"word": w.text, "start": w.start, "end": w.end} for cue in document.cues for w in cue.words
+    ]
+
+
 def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional=None) -> dict:
     if fmt != "srt":
         raise SubtitleSkillError(
@@ -347,6 +450,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         or caption_profile is not None
         or any(c.ruby for c in document.cues)
     )
+    animation = _parse_animation(request, document, mode=mode, use_ass=use_ass, regional=regional)
     effective_style: Optional[SubtitleStyle] = None
     if use_ass:
         size = _document_wide_style_value(document, "size")
@@ -499,6 +603,9 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                     else {}
                 ),
                 **({"caption_profile": caption_profile} if caption_profile is not None else {}),
+                # what caption.py is asked to draw; absent for a static burn, so its
+                # identity (and a cache hit on an earlier render) is unchanged
+                **({"animation": animation["engine_flags"]} if animation is not None else {}),
                 # the family named and the bytes of every font file libass may draw from;
                 # the directory's own path is not part of what was drawn
                 **(
@@ -579,6 +686,9 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             style=burn_style,
             fonts_dir=fonts_dir_path,
             font_family=font_choice.family if font_choice is not None else None,
+            animate=animation["animate"] if animation is not None else None,
+            karaoke=animation["karaoke"] if animation is not None else None,
+            word_timings=_word_timings(document) if animation is not None and animation["karaoke"] else None,
         )
     finally:
         subtitle_tmp_path.unlink(missing_ok=True)
@@ -606,6 +716,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
     }
     if placement_plan is not None:
         record["placement"] = placement_plan.to_dict()
+    if animation is not None:
+        record["animation"] = animation
     if font_choice is not None:
         # the path as the request gave it, and what was read from it; never a file's bytes
         record["fonts_dir"] = {
@@ -688,6 +800,8 @@ def _finish(
         response["regional_profile"] = record["regional_profile"]
     if record.get("caption_profile") is not None:
         response["caption_profile"] = record["caption_profile"]
+    if record.get("animation") is not None:
+        response["animation"] = record["animation"]
     return response
 
 

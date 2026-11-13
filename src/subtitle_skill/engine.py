@@ -135,6 +135,23 @@ _ERROR_KIND_TO_CODE = {
 #: caller-actionable INVALID_INPUT.
 ALLOWED_RENDER_MODES = frozenset({"burn", "mux"})
 
+#: `caption.py --animate` (its argparse `choices`, read at ffmpeg-skill 2.24.0
+#: and 3.8.3): a per-cue entrance animation that caption.py draws into the ASS
+#: it generates from an SRT. subtitle-skill only passes the value through
+#: (roadmap step 12, docs/adr/ADR-011-animated-captions.md). "none" is the
+#: default and sends nothing.
+ANIMATE_MODES = ("none", "fade", "pop", "slide")
+
+#: `caption.py --karaoke --karaoke-style {sweep,word}` (same versions): "sweep"
+#: fills each cue from the text colour to the highlight colour word by word,
+#: "word" draws the active word larger and in the highlight colour.
+KARAOKE_STYLES = ("sweep", "word")
+
+#: The caption.py flags an animated burn sends. A caption tool that lacks one
+#: cannot do what the request asks, so the burn is a DEPENDENCY_ERROR rather
+#: than a burn that silently does not move.
+_ANIMATION_FLAGS = ('"--animate"', '"--karaoke"', '"--karaoke-style"', '"--karaoke-timing"', '"--write-ass"')
+
 
 def _candidate_install_roots() -> list[Path]:
     """Directories ffmpeg-skill's own installer (bin/install.js) writes to.
@@ -201,6 +218,45 @@ def caption_takes_fonts_dir(root: Path) -> bool:
     without them cannot be told where the fonts are."""
     source = _caption_source(root)
     return '"--fonts-dir"' in source and '"--font"' in source
+
+
+def caption_takes_animation(root: Path) -> bool:
+    """`caption.py --animate`, `--karaoke`, `--karaoke-style`, `--karaoke-timing`
+    and `--write-ass` (read at ffmpeg-skill 2.24.0 and 3.8.3)."""
+    source = _caption_source(root)
+    return all(flag in source for flag in _ANIMATION_FLAGS)
+
+
+def animation_argv(animate: Optional[str], karaoke: Optional[str], ass_path: Path) -> list[str]:
+    """The caption.py flags for an animated burn; empty when nothing moves.
+
+    `--write-ass` names where caption.py writes the ASS it generates for the
+    animation (next to subtitle-skill's own temporary SRT, removed after the
+    burn) instead of its default `<output>.ass` beside the caller's output.
+    `--karaoke-timing even` is sent with every karaoke burn: the words come
+    from the cue's own `words` (see `burn_in`), and when caption.py cannot use
+    them for a cue it falls back to an even split instead of its default
+    estimate from the audio's loudness, so the same request always draws the
+    same frames.
+    """
+    argv: list[str] = []
+    if animate is not None and animate != "none":
+        if animate not in ANIMATE_MODES:
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"animate must be one of {list(ANIMATE_MODES)}, got {animate!r}",
+                details={"field": "animate"},
+            )
+        argv += ["--animate", animate]
+    if karaoke is not None:
+        if karaoke not in KARAOKE_STYLES:
+            raise SubtitleSkillError(
+                "INVALID_INPUT", f"karaoke must be one of {list(KARAOKE_STYLES)}, got {karaoke!r}",
+                details={"field": "karaoke"},
+            )
+        argv += ["--karaoke", "--karaoke-style", karaoke, "--karaoke-timing", "even"]
+    if argv:
+        argv += ["--write-ass", str(ass_path)]
+    return argv
 
 
 def _looks_like_ffmpeg_skill(root: Path) -> bool:
@@ -482,9 +538,28 @@ def burn_in(
     style: Optional[SubtitleStyle] = None,
     fonts_dir: Optional[Path] = None,
     font_family: Optional[str] = None,
+    animate: Optional[str] = None,
+    karaoke: Optional[str] = None,
+    word_timings: Optional[list] = None,
     timeout_seconds: int = 600,
 ) -> dict:
     """Delegate subtitle burn-in (or soft-mux) to ffmpeg-skill's `caption` tool.
+
+    `animate` / `karaoke` (roadmap step 12, docs/adr/ADR-011-animated-captions.md;
+    burn of an SRT only) are passed through as caption.py's own `--animate` /
+    `--karaoke --karaoke-style` (see `animation_argv`); caption.py draws the
+    animation, this skill draws none. With `karaoke`, `word_timings` (every
+    word of every cue as `{"word", "start", "end"}`, from the cues' `words`) is
+    written as `<srt stem>.words.json` next to the SRT, the file caption.py
+    reads word timings from. caption.py looks for it next to the SRT it
+    actually burns, and when its own layout rewrote the cues (a cue extended
+    to `--min-duration`, a cue split at `--max-lines`) that is
+    `<output stem>_adjusted.srt`, not the SRT given -- so the same words are
+    also written as `<output stem>_adjusted.words.json` when no such file is
+    there already (measured against ffmpeg-skill 2.24.0 and 3.8.3: without it
+    the words are ignored and the highlight splits each cue evenly). Every
+    file written here is removed after the burn. Nothing is sent when neither
+    is set: the argv is the one built before step 12.
 
     `fonts_dir` with `font_family` (burn only, both or neither;
     docs/adr/ADR-010-fonts-dir.md) draws the captions with the caller's own
@@ -573,6 +648,19 @@ def burn_in(
     if style is not None and not isinstance(style, SubtitleStyle):
         raise SubtitleSkillError("INVALID_INPUT", f"style must be a SubtitleStyle or None, got {type(style).__name__}")
 
+    animated = (animate is not None and animate != "none") or karaoke is not None
+    if animated and (mode != "burn" or subtitle_format != "srt"):
+        raise SubtitleSkillError(
+            "INVALID_INPUT",
+            "animate/karaoke are drawn by ffmpeg-skill caption from an SRT burn (mode 'burn'); "
+            "a soft track or an ASS cannot carry them",
+            details={"field": "animate" if animate not in (None, "none") else "karaoke"},
+        )
+    if karaoke is not None and not word_timings:
+        raise SubtitleSkillError(
+            "INVALID_INPUT", "karaoke needs the word timings of the cues", details={"field": "words"}
+        )
+
     if (fonts_dir is None) != (font_family is None):
         raise SubtitleSkillError("INVALID_INPUT", "fonts_dir and font_family go together")
     if fonts_dir is not None:
@@ -595,6 +683,13 @@ def burn_in(
             "fonts_dir needs a later ffmpeg-skill",
         )
 
+    if animated and not caption_takes_animation(root):
+        raise SubtitleSkillError(
+            "DEPENDENCY_ERROR",
+            "the installed ffmpeg-skill caption tool lacks --animate/--karaoke/--karaoke-style/--karaoke-timing/"
+            "--write-ass; animated captions need a later ffmpeg-skill",
+        )
+
     input_probe = probe(root, video_path, timeout_seconds=timeout_seconds)
     if not input_probe.get("video"):
         raise SubtitleSkillError("INVALID_INPUT", f"input has no video stream: {video_path}")
@@ -614,6 +709,20 @@ def burn_in(
         argv += _style_argv(style)
     if fonts_dir is not None:
         argv += ["--fonts-dir", str(fonts_dir), "--font", font_family]
+    side_files: list[Path] = []
+    if animated:
+        ass_path = subtitle_path.with_suffix(".animated.ass")
+        argv += animation_argv(animate, karaoke, ass_path)
+        side_files.append(ass_path)
+        if karaoke is not None:
+            words_doc = json.dumps({"words": list(word_timings)}, ensure_ascii=False)
+            beside_srt = subtitle_path.with_suffix(".words.json")
+            beside_adjusted = output_path.with_name(output_path.stem + "_adjusted.words.json")
+            for path in (beside_srt, beside_adjusted):
+                if path.exists():
+                    continue  # never replace (or later remove) a file this call did not write
+                path.write_text(words_doc, encoding="utf-8")
+                side_files.append(path)
 
     try:
         response = _run_tool(
@@ -629,6 +738,9 @@ def burn_in(
                 exc.code, f"{exc.message}. {FONTS_DIR_HINT}.", details={"field": "fonts_dir"}
             ) from exc
         raise
+    finally:
+        for path in side_files:
+            path.unlink(missing_ok=True)
 
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise SubtitleSkillError("OUTPUT_ERROR", "ffmpeg-skill/caption reported success but output is missing/empty")
