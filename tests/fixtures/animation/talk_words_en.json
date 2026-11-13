@@ -1,0 +1,17 @@
+{
+  "id": "animation-talk-en",
+  "language": "en",
+  "cues": [
+    {
+      "id": "1",
+      "start": 1.0,
+      "end": 2.6,
+      "text": "MOVE WITH ME",
+      "words": [
+        {"text": "MOVE", "start": 1.0, "end": 1.2},
+        {"text": "WITH", "start": 1.2, "end": 1.4},
+        {"text": "ME", "start": 1.4, "end": 2.6}
+      ]
+    }
+  ]
+}

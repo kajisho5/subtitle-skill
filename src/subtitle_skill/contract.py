@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from . import CONTRACT_VERSION, SKILL_ID, SKILL_VERSION
 from .doctor import RENDER_SUPPORTED_FORMATS
-from .engine import ALLOWED_RENDER_MODES, FFMPEG_SKILL_CONTRACT_VERSION, FFMPEG_SKILL_TOOLS, MUX_CONTAINERS
+from .engine import (
+    ALLOWED_RENDER_MODES,
+    ANIMATE_MODES,
+    FFMPEG_SKILL_CONTRACT_VERSION,
+    FFMPEG_SKILL_TOOLS,
+    KARAOKE_STYLES,
+    MUX_CONTAINERS,
+)
 from .errors import ERROR_CODES, NON_RETRYABLE_CODES
 from .formats import SUPPORTED_FORMATS
 from .formats.ttml import EBU_TT_D_STANDARD, IMSC11_TEXT_PROFILE
@@ -117,7 +124,14 @@ def build_contract() -> dict:
                     "subtitle's script: the family that has the most of the text is read from those files and "
                     "named to ffmpeg-skill `caption --fonts-dir --font`; the response's `fonts_dir` records the "
                     "path as given, the family and its files. Without it, a burn that ffmpeg-skill refuses for a "
-                    "missing font fails with that reason and a pointer to this field."
+                    "missing font fails with that reason and a pointer to this field. `animate` "
+                    "(none|fade|pop|slide) and `karaoke` (sweep|word) (docs/adr/ADR-011-animated-captions.md; "
+                    "opt-in, burn only) are passed through to ffmpeg-skill `caption --animate` / `--karaoke "
+                    "--karaoke-style`, which draws them; `karaoke` times each word from `cue.words` and is refused "
+                    "(INVALID_INPUT, the field named) for a cue without them. A soft track, a burn through this "
+                    "skill's own ASS (`placement`, `regional_profile`, cue `ruby`, `caption_profile`) and `animate` "
+                    "with `karaoke: \"word\"` are refused with the reason; the response's `animation` records the "
+                    "values and the caption flags sent. Without either field the call to ffmpeg-skill is unchanged."
                 ),
                 "inputs": [
                     "video_input",
@@ -131,10 +145,12 @@ def build_contract() -> dict:
                     "regional_profile?",
                     "caption_profile?",
                     "fonts_dir?",
+                    "animate?",
+                    "karaoke?",
                 ],
                 "outputs": [
                     "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
-                    "regional_profile?", "caption_profile?", "fonts_dir?",
+                    "regional_profile?", "caption_profile?", "fonts_dir?", "animation?",
                 ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
@@ -143,6 +159,12 @@ def build_contract() -> dict:
                     "reframe_schema": REFRAME_SCHEMA,
                     "fields": sorted(PLACEMENT_FIELDS),
                     "positions": ["bottom", "top"],
+                },
+                "animation": {
+                    "animate": list(ANIMATE_MODES),
+                    "karaoke": list(KARAOKE_STYLES),
+                    "for": "mode 'burn' of an SRT; karaoke needs every cue's words",
+                    "engine_flags": ["--animate", "--karaoke", "--karaoke-style", "--karaoke-timing"],
                 },
             },
             "translate": {
@@ -234,6 +256,7 @@ def build_contract() -> dict:
             "caption_profiles": ["shorts"],
             "ruby": True,
             "fonts_dir": True,
+            "animated_captions": True,
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -258,7 +281,10 @@ def build_contract() -> dict:
                 },
             },
             "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
-            "render": ["mode", "audio_stream", "placement", "regional_profile", "caption_profile", "fonts_dir"],
+            "render": [
+                "mode", "audio_stream", "placement", "regional_profile", "caption_profile", "fonts_dir", "animate",
+                "karaoke",
+            ],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],
         },

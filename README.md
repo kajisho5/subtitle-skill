@@ -267,6 +267,33 @@ ffmpeg-skill/caption failed (input): no installed font covers Japanese text on t
 Or set request.fonts_dir to a workspace directory holding a font file (.ttf/.otf/.ttc) that covers the text.
 ```
 
+### Animated captions (`render` `animate`, `karaoke`)
+
+Burned captions can pop in, fade, slide up, or highlight word by word. Both
+fields are opt-in, burn only, and passed straight through to ffmpeg-skill
+`caption --animate` / `--karaoke --karaoke-style`, which draws them
+([ADR-011](docs/adr/ADR-011-animated-captions.md)):
+
+```json
+"animate": "pop",
+"karaoke": "sweep"
+```
+
+`animate` is `none` (default), `fade`, `pop` or `slide`. `karaoke` is `sweep`
+(the line fills with the highlight colour word by word) or `word` (the spoken
+word is drawn larger in the highlight colour). `karaoke` times each word from
+the cue's `words` (`[{text, start, end}]`, from a transcription), and a cue
+without them is `INVALID_INPUT` with `details.field` naming the cue's `words`.
+These are refused with the reason, never burned static:
+- a soft track (`mode: "mux"`);
+- a burn through subtitle-skill's own ASS (`placement`, `regional_profile`,
+  cue `ruby`, `caption_profile`);
+- `animate` with `karaoke: "word"`, because ffmpeg-skill then fades the whole
+  caption out after the first word.
+
+The response's `animation` records the values and the exact caption flags
+sent. Without either field the call to ffmpeg-skill is the same as before.
+
 ### Ruby, vertical text and regional profiles
 
 Cues can carry ruby (`"ruby": [{"base": "字幕", "text": "じまく"}]`) and
@@ -525,7 +552,9 @@ non-empty string, never `null`, since a known consumer treats a falsy
 `engine_response` (ffmpeg-skill's own reported `commands` and `probe` —
 always its actual values, never fabricated here). A burn with `fonts_dir`
 also records `fonts_dir`: the path as the request gave it, the family named
-and the files that carry it — never a font's bytes.
+and the files that carry it — never a font's bytes. An animated burn records
+`animation`: `animate`, `karaoke`, where the word timings came from, and the
+caption flags sent.
 
 ### Security
 
@@ -664,6 +693,7 @@ wanted, belongs to whoever is driving the render.
 | **ffmpeg-skill compatibility checked daily** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main, and the v3.0.0 tag, and runs the test suite against each, separately from normal-PR CI (ffmpeg-skill 3.x needs Python 3.10+ and FFmpeg 6.1+; the `>=1.0` contract_version range already admits its `contract_version` 2.0); a new release fails it only if subtitle-skill actually breaks |
 | **7 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11, plus one Ubuntu job with ffmpeg and a Japanese font that runs every burn and mux test against the vendored ffmpeg-skill |
 | **burn from a fonts directory** | under a fontconfig with no Japanese font, a Japanese burn without `fonts_dir` fails with the engine's reason and the field to set; with a font file in `fonts_dir` it draws the text (two different captions give different frames, which empty boxes do not), through the SRT and the ASS path |
+| **animated captions** | one burn per `animate` mode and per `karaoke` style on a lavfi clip; the decoded frames show the caption absent on the cue's first frame, partial inside the entrance and full after it, and the karaoke highlight following the cue's `words` |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 
 ```bash
@@ -718,7 +748,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption` |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope

@@ -242,6 +242,18 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Animated captions from cues** (ECOSYSTEM_ROADMAP step 12,
+  `docs/adr/ADR-011-animated-captions.md`): `render` `animate` /
+  `karaoke` are passed through to ffmpeg-skill `caption --animate` /
+  `--karaoke --karaoke-style`, never drawn here. Karaoke words come from
+  `cue.words`, written as `.words.json` beside the temporary SRT and beside
+  caption.py's `<output>_adjusted.srt` (it looks there after lengthening a
+  cue; measured at 2.24.0 and 3.8.3). Refused, not burned static: mux, the
+  own-ASS paths (placement / regional / ruby / shorts), and `animate` with
+  `karaoke: "word"` (caption.py's per-word events make the caption blink
+  out after the first word). Additive contract change. Tests:
+  `tests/test_animation.py`, real burns read back frame by frame.
+
 - **`render` `fonts_dir`: a burn with the caller's own font files**
   (`docs/adr/ADR-010-fonts-dir.md`, `src/subtitle_skill/fonts.py`,
   `tests/test_fonts_dir.py`). For a machine where no installed font covers the

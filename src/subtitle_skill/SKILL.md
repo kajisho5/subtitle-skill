@@ -231,6 +231,19 @@ can omit `constraints` entirely.
     the workspace is `PATH_NOT_ALLOWED`. An ffmpeg-skill whose caption tool
     takes no fonts directory is `DEPENDENCY_ERROR`.
 
+  - `animate` / `karaoke` (optional, `mode: "burn"` only;
+    `docs/adr/ADR-011-animated-captions.md`): `animate` is `none` (default),
+    `fade`, `pop` or `slide`; `karaoke` is `sweep` or `word`. Both are passed
+    through to ffmpeg-skill `caption --animate` / `--karaoke`, which draws
+    them. `karaoke` needs `words: [{text, start, end}]` on every cue, one per
+    space-separated word of the drawn text (a speaker prefix counts);
+    otherwise `INVALID_INPUT` with `details.field` `subtitle.cues[N].words`.
+    Refused with `INVALID_INPUT` and `details.conflicts_with`: `mode: "mux"`,
+    `placement`, `regional_profile`, cue `ruby`, `caption_profile`, and
+    `animate` together with `karaoke: "word"`. Drop the conflicting field
+    and retry; never retry unchanged. The response's `animation` gives
+    `{animate, karaoke, word_timings, engine_flags}`.
+
 ## `translate` and `mux`
 
 - **`translate`**: `subtitle`, `target_language`, `format` (`srt`/`vtt`/`ttml`/`ebu-tt-d`),
