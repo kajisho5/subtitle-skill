@@ -1,3 +1,7 @@
+## v0.10.1 - 2026-11-19
+
+- ci: commit the contract as contract/contract.json (#40) (4093e7e)
+
 ## v0.10.0 - 2026-11-13
 
 - feat(render): animated captions from cues via ffmpeg-skill caption (roadmap step 12) (#39) (91d2dcf)
