@@ -114,6 +114,12 @@ jobs:
           NEW_VERSION: ${{ steps.target.outputs.target_version }}
         run: python3 scripts/bump_version.py
 
+      # contract/contract.json carries the version, so it is regenerated here (after any bump) and committed with
+      # the release: the tag's committed file is then that tag's own `contract --json` output.
+      - name: Regenerate the committed contract file
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: python3 contract/generate.py
+
       - name: Generate changelog entry
         if: steps.guard.outputs.already_tagged == 'false'
         run: |
@@ -144,7 +150,7 @@ jobs:
         if: steps.guard.outputs.already_tagged == 'false'
         run: |
           set -euo pipefail
-          git add pyproject.toml CHANGELOG.md
+          git add pyproject.toml CHANGELOG.md contract/contract.json
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): v${{ steps.target.outputs.target_version }}"
             git push origin HEAD:main
