@@ -506,6 +506,11 @@ subtitle-skill doctor --json     # what can actually run right now
 subtitle-skill run req.json --json   # execute one operation — always one JSON document on stdout
 ```
 
+`contract/contract.json` is the same contract committed as a file (byte for byte the `subtitle-skill contract --json` output),
+so any release's contract is `git show vX.Y.Z:contract/contract.json`, with nothing installed or run. Regenerate it
+with `python contract/generate.py` after a contract change: a test fails when it is stale, and the release workflow
+regenerates it after the version bump.
+
 `contract --json` is generated to match what's implemented, not
 maintained beside it by hand: `deterministic: true`, per-operation
 `formats`, the full error-code list under `errors`, and `out_of_scope`
