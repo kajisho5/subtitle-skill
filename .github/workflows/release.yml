@@ -71,9 +71,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/dependabot_release_labels.py
 
+      # Velisa ADR-023: pull requests labelled only chore / ci / docs / test release nothing. release-drafter's
+      # `default` cannot say "no release", so release_gate.py answers that from the merged pull requests' labels.
+      - name: Decide whether anything merged since the latest tag is releasable
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/release_gate.py
+
       - name: Draft next version from merged PR labels (no publish, no write)
         id: drafter
-        if: steps.current.outputs.auto_bump == 'true' && steps.current.outputs.latest_tag != ''
+        if: steps.current.outputs.auto_bump == 'true' && steps.current.outputs.latest_tag != '' && steps.gate.outputs.releasable != 'false'
         uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0 # v7.10.0
         with:
           config-name: release-drafter.yml
@@ -83,9 +91,15 @@ jobs:
 
       - name: Decide target version
         id: target
+        env:
+          RELEASABLE: ${{ steps.gate.outputs.releasable }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.current.outputs.auto_bump }}" = "true" ] && [ -n "${{ steps.current.outputs.latest_tag }}" ]; then
+          if [ "${{ steps.current.outputs.auto_bump }}" = "true" ] && [ -n "${{ steps.current.outputs.latest_tag }}" ] && [ "$RELEASABLE" = "false" ]; then
+            # only chore/ci/docs/test pull requests since the tag: the tagged version again, so the guard below skips it
+            echo "Only chore/ci/docs/test pull requests since ${{ steps.current.outputs.latest_tag }}: nothing to release (Velisa ADR-023)."
+            TARGET_VERSION="${{ steps.current.outputs.current_version }}"
+          elif [ "${{ steps.current.outputs.auto_bump }}" = "true" ] && [ -n "${{ steps.current.outputs.latest_tag }}" ]; then
             TARGET_VERSION="${{ steps.drafter.outputs.resolved_version }}"
           else
             TARGET_VERSION="${{ steps.current.outputs.current_version }}"
@@ -153,6 +167,21 @@ jobs:
           git add pyproject.toml CHANGELOG.md contract/contract.json
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): v${{ steps.target.outputs.target_version }}"
+          fi
+
+      # The release commit is pushed with GITHUB_TOKEN, so no workflow runs on it on main: test it here, before
+      # it is pushed. A failure stops the release; main and the tags stay as they were (Velisa ADR-023).
+      - name: Test the release commit before pushing it
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          python3 -m pip install -q -e . pytest
+          python3 -m pytest -q tests/test_contract.py tests/test_contract_file.py tests/test_release_labels.py tests/test_version_source.py tests/test_release_gate.py
+
+      - name: Push the release commit
+        if: steps.guard.outputs.already_tagged == 'false'
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-list --count origin/main..HEAD)" != "0" ]; then
             git push origin HEAD:main
           fi
 
