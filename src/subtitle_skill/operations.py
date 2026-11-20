@@ -125,13 +125,23 @@ def execute(request: Mapping[str, Any]) -> dict:
 
     document, constraints, regional = _apply_regional(request, document, constraints)
 
+    # request.spoken_numbers (docs/adr/ADR-013-caption-quality.md, part 2): number phrases
+    # written as one token ("five thousand dollars" -> $5,000). Absent, nothing changes.
+    numbers_report = None
+    if request.get("spoken_numbers") is not None:
+        from .numbers import normalize_document, parse_locale
+
+        document, numbers_report = normalize_document(document, parse_locale(request.get("spoken_numbers")))
+
     issues = validate_document(document, constraints=constraints, video_duration=video_duration)
     issues += _ruby_issues(document, fmt if operation == "generate" else None)
     document = document.sorted_by_start()
 
     if operation == "generate":
-        return _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional)
-    return _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional)
+        return _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional,
+                             numbers_report=numbers_report)
+    return _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional,
+                       numbers_report=numbers_report)
 
 
 def _apply_regional_constraints(profile, constraints: SubtitleConstraints) -> tuple:
@@ -207,7 +217,8 @@ def _write_format(fmt: str, document: SubtitleDocument, output_path: Path) -> Op
     return conformance
 
 
-def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional=None) -> dict:
+def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, started, regional=None, *,
+                  numbers_report=None) -> dict:
     output_path = policy.resolve_output(output_path_rel)
     identity = compute_identity(
         skill_version=SKILL_VERSION,
@@ -237,6 +248,8 @@ def _run_generate(policy, document, fmt, output_path_rel, constraints, issues, s
         record["conformance"] = conformance
     if regional is not None:
         record["regional_profile"] = regional
+    if numbers_report is not None:
+        record["spoken_numbers"] = numbers_report
     _write_sidecar(output_path, record)
     return _finish(record, output_path, issues, "generate", reused=False, started=started)
 
@@ -275,7 +288,7 @@ def _document_wide_style_value(document: SubtitleDocument, field: str):
 
 
 def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, mode: str, use_ass: bool,
-                     regional) -> Optional[dict]:
+                     regional, quality: tuple = ()) -> Optional[dict]:
     """`request.animate` / `request.karaoke` (roadmap step 12,
     docs/adr/ADR-011-animated-captions.md), checked before any video is read.
 
@@ -324,7 +337,7 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
                 ("ruby", any(c.ruby for c in document.cues)),
             )
             if used
-        ]
+        ] + list(quality)
         raise SubtitleSkillError(
             "INVALID_INPUT",
             f"{field} cannot be combined with {', '.join(through)}: those burn through subtitle-skill's own ASS, "
@@ -383,7 +396,8 @@ def _word_timings(document: SubtitleDocument) -> list:
     ]
 
 
-def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional=None) -> dict:
+def _run_render(policy, document, fmt, output_path_rel, constraints, issues, request, started, regional=None, *,
+                numbers_report=None) -> dict:
     if fmt != "srt":
         raise SubtitleSkillError(
             "UNSUPPORTED_FORMAT",
@@ -450,13 +464,46 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             raise SubtitleSkillError("INVALID_INPUT", "request.fonts_dir must be a non-empty path inside the workspace")
         if mode != "burn":
             raise SubtitleSkillError("INVALID_INPUT", "fonts_dir is for burned captions (mode 'burn')")
+    # docs/adr/ADR-013-caption-quality.md: cut-aware cues (any mode), emphasis and automatic
+    # legibility (burn only). Each is opt-in; absent, nothing below changes.
+    cut_spec = None
+    if request.get("cuts") is not None:
+        from .cuts import parse_cuts
+
+        cut_spec = parse_cuts(request["cuts"], policy)
+    from .emphasis import parse_emphasis
+    from .legibility import parse_legibility
+
+    emphasis_spec = parse_emphasis(request.get("emphasis"))
+    legibility_mode = parse_legibility(request.get("legibility"))
+    for name, used in (("emphasis", emphasis_spec is not None), ("legibility", legibility_mode is not None)):
+        if used and mode != "burn":
+            raise SubtitleSkillError("INVALID_INPUT", f"{name} is drawn into the picture: it needs mode 'burn'",
+                                     details={"field": name, "conflicts_with": ["mode"]})
+    spaced_numbers = False
+    if numbers_report is not None:
+        from .numbers import has_spaced_token
+
+        spaced_numbers = has_spaced_token(numbers_report)
+    # the features that need this skill's own ASS: a highlighted word, a per-cue treatment, and a
+    # written number with a no-break space in it (ffmpeg-skill caption re-wraps an SRT at any space)
+    quality = tuple(
+        name
+        for name, used in (
+            ("emphasis", emphasis_spec is not None),
+            ("legibility", legibility_mode is not None),
+            ("spoken_numbers", spaced_numbers),
+        )
+        if used and mode == "burn"
+    )
     use_ass = mode == "burn" and (
         request.get("placement") is not None
         or regional is not None
         or caption_profile is not None
         or any(c.ruby for c in document.cues)
+        or bool(quality)
     )
-    animation = _parse_animation(request, document, mode=mode, use_ass=use_ass, regional=regional)
+    animation = _parse_animation(request, document, mode=mode, use_ass=use_ass, regional=regional, quality=quality)
     effective_style: Optional[SubtitleStyle] = None
     if use_ass:
         size = _document_wide_style_value(document, "size")
@@ -557,6 +604,33 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 )
             )
 
+    cuts_report = None
+    if cut_spec is not None:
+        from .cuts import apply_cuts, detect_cuts, read_shots
+
+        if cut_spec.detect:
+            cut_times = detect_cuts(video_path, threshold=cut_spec.threshold, min_scene=cut_spec.min_scene)
+            source = {"source": "detect", "method": "ffmpeg scdet", "threshold": cut_spec.threshold,
+                      "min_scene": cut_spec.min_scene}
+        else:
+            cut_times = read_shots(cut_spec.shots_path, video_sha256)
+            source = {"source": "shots", "shots": cut_spec.shots_rel}
+        min_duration = cut_spec.min_duration
+        if min_duration is None:
+            from .validation import DEFAULT_MIN_DURATION
+
+            min_duration = constraints.min_duration if constraints.min_duration is not None else DEFAULT_MIN_DURATION
+        if shorts_document is not None:
+            shorts_document, cuts_report = apply_cuts(shorts_document, cut_times, min_duration=min_duration)
+        else:
+            document, cuts_report = apply_cuts(document, cut_times, min_duration=min_duration)
+            if cuts_report["changes"]:
+                issues = validate_document(document, constraints=constraints, video_duration=real_video_duration)
+        cuts_report = {**source, **cuts_report}
+        for item in cuts_report["unresolved"]:
+            issues.append(ValidationIssue("warning", "CUE_SPANS_CUT", item["cue_id"],
+                                          f"the cue spans the cut at {item['cut']:g} s: {item['reason']}"))
+
     placement_plan = None
     if placement_spec is not None:
         from .placement import plan_placement
@@ -575,6 +649,20 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                     "a face or region overlaps both the bottom and the top caption box; the cue stays at the bottom",
                 )
             )
+
+    emphasis_plan = None
+    if emphasis_spec is not None:
+        from .emphasis import plan_emphasis
+
+        emphasis_plan = plan_emphasis(shorts_document or document, emphasis_spec)
+
+    legibility_report = None
+    if legibility_mode is not None:
+        legibility_report = _measure_legibility(
+            video_path, shorts_document or document, width=width, height=height,
+            positions=placement_plan.positions if placement_plan is not None else {},
+            size=_document_wide_style_value(document, "size"), shorts_layout=shorts_layout,
+        )
 
     # The render identity is anchored on the *content* of the ffmpeg-skill
     # scripts that will actually execute (sha256 of caption.py + _common.py),
@@ -612,6 +700,14 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 # what caption.py is asked to draw; absent for a static burn, so its
                 # identity (and a cache hit on an earlier render) is unchanged
                 **({"animation": animation["engine_flags"]} if animation is not None else {}),
+                # docs/adr/ADR-013-caption-quality.md: present only when asked for, so a request
+                # without them keeps its identity (the spoken_numbers rewrite is in the document)
+                **({"cuts": {k: v for k, v in cuts_report.items() if k != "changes"}} if cuts_report else {}),
+                **({"emphasis": {"color": emphasis_plan["color"], "marks": emphasis_plan["marks"]}}
+                   if emphasis_plan is not None else {}),
+                **({"legibility": {c["cue_id"]: c["treatment"] for c in legibility_report["cues"]}}
+                   if legibility_report is not None else {}),
+                **({"spoken_numbers": numbers_report["locale"]} if numbers_report is not None else {}),
                 # the family named and the bytes of every font file libass may draw from;
                 # the directory's own path is not part of what was drawn
                 **(
@@ -659,15 +755,30 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         # for the whole burn (the SRT above was generated only to apply its checks)
         from .formats.ass import generate_ass, generate_shorts_ass
 
+        from .formats.ass import Look
+
         positions = placement_plan.positions if placement_plan is not None else None
         font = font_choice.family if font_choice is not None else None
+        look = None
+        if emphasis_plan is not None or legibility_report is not None:
+            from .emphasis import marks_by_cue
+
+            look = Look(
+                marks=marks_by_cue(emphasis_plan) if emphasis_plan is not None else None,
+                highlight_color=emphasis_plan["color"] if emphasis_plan is not None else "FFD200",
+                treatments={c["cue_id"]: c["treatment"] for c in legibility_report["cues"]}
+                if legibility_report is not None else None,
+                boxes={c["cue_id"]: tuple(c["box"]) for c in legibility_report["cues"]}
+                if legibility_report is not None else None,
+            )
         if shorts_document is not None:
             subtitle_content = generate_shorts_ass(
-                shorts_document, width=width, height=height, positions=positions, font=font
+                shorts_document, width=width, height=height, positions=positions, font=font, look=look
             )
         else:
             subtitle_content = generate_ass(
-                document, width=width, height=height, positions=positions, style=effective_style, font=font
+                document, width=width, height=height, positions=positions, style=effective_style, font=font,
+                look=look, wrap=bool(quality),
             )
         burn_format, burn_style = "ass", None
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
@@ -733,6 +844,14 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         }
     if regional is not None:
         record["regional_profile"] = regional
+    if cuts_report is not None:
+        record["cuts"] = cuts_report
+    if numbers_report is not None:
+        record["spoken_numbers"] = numbers_report
+    if emphasis_plan is not None:
+        record["emphasis"] = emphasis_plan
+    if legibility_report is not None:
+        record["legibility"] = legibility_report
     if shorts_document is not None:
         from .shorts import MAX_WORDS, SAFE
 
@@ -808,7 +927,59 @@ def _finish(
         response["caption_profile"] = record["caption_profile"]
     if record.get("animation") is not None:
         response["animation"] = record["animation"]
+    for key in ("cuts", "spoken_numbers", "emphasis", "legibility"):
+        if record.get(key) is not None:
+            response[key] = record[key]
     return response
+
+
+def _measure_legibility(video_path, document, *, width, height, positions, size, shorts_layout) -> dict:
+    """`legibility: "auto"` (docs/adr/ADR-013-caption-quality.md, part 4): the box each cue's
+    text is drawn in, from the layout the ASS writer uses, measured on sampled frames."""
+    import math
+
+    from .formats._text import display_segments
+    from .formats.ass import DEFAULT_COLOR, DEFAULT_MARGIN_POINTS, DEFAULT_OUTLINE_POINTS, DEFAULT_SIZE_POINTS
+    from .formats.ass import SCRIPT_HEIGHT as ASS_SCRIPT_HEIGHT
+    from .legibility import Region, measure, scrim_contrast
+    from .shorts import estimate_width
+
+    def scaled(points):
+        return max(1, round(points * height / ASS_SCRIPT_HEIGHT))
+
+    regions = []
+    for cue in document.cues:
+        text = "".join(seg for seg, _r in display_segments(cue))
+        color = cue.style.color.strip().lstrip("#") if cue.style is not None and cue.style.color else DEFAULT_COLOR
+        color = color[2:] if color.lower().startswith("0x") else color
+        position = positions.get(cue.id, "bottom")
+        if shorts_layout is not None:
+            box = shorts_layout.caption_boxes()[position]
+            fs = shorts_layout.fit_font_size(text)
+            w = min(width, estimate_width(text, fs) + fs)
+            h = fs * 1.4
+            y = (box.y + box.h) * height - h
+        else:
+            fs = scaled(size / 100.0 * ASS_SCRIPT_HEIGHT if size else DEFAULT_SIZE_POINTS)
+            room = width * 0.9
+            lines = text.split("\n")
+            widest = max(estimate_width(line, fs) for line in lines)
+            count = sum(max(1, math.ceil(estimate_width(line, fs) / room)) for line in lines)
+            w = min(room, widest) + fs
+            h = count * fs * 1.25 + 2 * scaled(DEFAULT_OUTLINE_POINTS)
+            margin = scaled(DEFAULT_MARGIN_POINTS)
+            y = margin if position == "top" else height - margin - h
+        x = (width - w) / 2.0
+        regions.append(Region(cue.id, int(round(x)), int(round(y)), int(round(w)), int(round(h)),
+                              cue.start, cue.end, color))
+    measured = measure(video_path, regions, width=width, height=height)
+    cues = []
+    for region in regions:
+        item = {"cue_id": region.cue_id, **measured[region.cue_id]}
+        if item["treatment"] == "scrim":
+            item["contrast_with_scrim"] = scrim_contrast(region.text_color, item["background_luminance"])
+        cues.append(item)
+    return {"mode": "auto", "cues": cues}
 
 
 # --------------------------------------------------------------------------

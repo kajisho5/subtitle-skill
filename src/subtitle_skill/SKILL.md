@@ -111,6 +111,7 @@ them (no cue is deleted, merged, or shifted):
 | `KINSOKU_LINE_START` / `KINSOKU_LINE_END` | (ja/zh/ko only) a line break leaves a character that may not begin a line (e.g. `。、」）ー ゃ っ`) at a line start, or one that may not end a line (e.g. `「『（`) at a line end |
 | `RUBY_AS_TEXT` | (`generate` to `srt` / `ebu-tt-d`) the format has no ruby, so the cue's reading is written in brackets after its base (`字幕（じまく）`) |
 | `CAPTION_OVERLAP_UNAVOIDABLE` | (`render` with `placement` only) a face or region overlaps both the bottom and the top caption box while the cue is on screen; the cue stays at the bottom |
+| `CUE_SPANS_CUT` | (`render` with `cuts` only) a hard cut falls inside a cue too short to split or move within `cuts.min_duration`; the cue is left as it is |
 
 **Locale profiles (ja / zh / ko).** When `subtitle.language`'s primary
 subtag is `ja`, `zh` or `ko` (`ja-JP`, `zh-Hans`, `ko-KR`, ...), line length
@@ -163,6 +164,8 @@ can omit `constraints` entirely.
     (TTML, unlike SRT and WebVTT, can carry colour). The written document is
     checked against its profile first; the response's `conformance` says
     which profile it conforms to. See `docs/adr/ADR-007-ttml-output.md`.
+  - `spoken_numbers: "en"` writes spoken number phrases as one token, as
+    for `render` (below).
 - **`render`**: requires `video_input`; `format` must be `"srt"`.
   Validates, generates the SRT, then delegates the actual burn-in to
   ffmpeg-skill's `caption` tool. Requesting `render` with `format: "vtt"`
@@ -243,6 +246,36 @@ can omit `constraints` entirely.
     `animate` together with `karaoke: "word"`. Drop the conflicting field
     and retry; never retry unchanged. The response's `animation` gives
     `{animate, karaoke, word_timings, engine_flags}`.
+
+  - Caption quality for talking-head video (each optional;
+    `docs/adr/ADR-013-caption-quality.md`). Without them nothing changes.
+    - `cuts` (burn or mux): no cue or shorts chunk stays on screen across a
+      hard cut. `{"shots": "<path>"}` reads a media-analysis-skill
+      `scene_detection` result (its `media-analysis/response@1`, or the one
+      observation; one measured on another file is refused);
+      `{"detect": true, "threshold"?: 10, "min_scene"?: 0.5}` measures the cuts
+      with ffmpeg `scdet`. A cue is split at the cut (words before it go
+      first), or its start or end moved to it, never below `cuts.min_duration`
+      (default: `constraints.min_duration`). Read `cuts.changes`: split cues get
+      new ids `<id>.a` / `<id>.b`. A cue too short to change is in
+      `cuts.unresolved` and a `CUE_SPANS_CUT` observation.
+    - `spoken_numbers: "en"` (also on `generate`): "five thousand dollars" →
+      `$5,000`, "forty percent" → `40%`, years and dates. Written forms with a
+      space use a no-break space and one merged word timing, so they are never
+      split across lines or cues. `spoken_numbers.replacements` lists each one.
+    - `emphasis` (burn): `"auto"` (a number or amount, else a proper name,
+      else a contrast word), `"numbers"`, or `{"mode": "words", "words": [...],
+      "color"?: "FFD200"}`. At most one highlighted word per cue, two on a cue
+      of eight words or more; never a filler word. `emphasis.marks` are
+      `{cue_id, word, index, reason}`: edit them and send them back as `words`.
+    - `legibility: "auto"` (burn): the frames behind each cue's text are
+      measured; a halo (contrast under 4.5 or a busy picture) or a scrim box
+      (under 3.0) is added only there. `legibility.cues[]` gives each cue's
+      `treatment`, `contrast`, `background_luminance` and `box`.
+    - emphasis, legibility and a written number with a space burn through
+      this skill's own ASS: with `animate` / `karaoke` they are refused
+      (`INVALID_INPUT`, `details.conflicts_with`). emphasis and legibility on
+      a mux are refused too.
 
 ## `translate` and `mux`
 

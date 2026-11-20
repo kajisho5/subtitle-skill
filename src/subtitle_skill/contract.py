@@ -21,6 +21,12 @@ from .shorts import PLATFORM_SAFE as SHORTS_PLATFORM_SAFE
 from .shorts import SAFE as SHORTS_SAFE
 from .placement import DETECTIONS_SCHEMA, PLACEMENT_FIELDS, REFRAME_SCHEMA
 from .translation import DEFAULT_ENGINE, ENGINES
+from .cuts import CUTS_FIELDS, DEFAULT_MIN_SCENE as CUTS_MIN_SCENE, DEFAULT_THRESHOLD as CUTS_THRESHOLD
+from .cuts import RESPONSE_SCHEMA as SHOTS_SCHEMA, SHOTS_KIND
+from .emphasis import DEFAULT_COLOR as EMPHASIS_COLOR, LONG_CUE_WORDS, MAX_MARKS, MAX_MARKS_LONG
+from .emphasis import MODES as EMPHASIS_MODES
+from .legibility import HALO_BELOW, MODES as LEGIBILITY_MODES, SCRIM_BELOW
+from .numbers import LOCALES as NUMBER_LOCALES
 
 OPERATIONS = ("generate", "render", "translate", "mux")
 
@@ -85,10 +91,13 @@ def build_contract() -> dict:
                     "the reading in brackets in SRT/EBU-TT-D (RUBY_AS_TEXT); `style.vertical` is TTML "
                     "`tts:writingMode=\"tbrl\"` / WebVTT `vertical:rl`. `regional_profile` (opt-in, "
                     "docs/adr/ADR-008-regional-profiles.md; first: `ja-broadcast`) applies a region's broadcast "
-                    "conventions: speaker colours where the format carries colour, line limits."
+                    "conventions: speaker colours where the format carries colour, line limits. "
+                    "`spoken_numbers` (opt-in, docs/adr/ADR-013-caption-quality.md) writes spoken number "
+                    "phrases as one token (\"five thousand dollars\" -> $5,000, \"forty percent\" -> 40%, years, "
+                    "dates); the response's `spoken_numbers` lists each replacement."
                 ),
-                "inputs": ["subtitle", "format", "output_path", "constraints?", "regional_profile?"],
-                "outputs": ["output", "sha256", "size", "timeline", "observation", "conformance?"],
+                "inputs": ["subtitle", "format", "output_path", "constraints?", "regional_profile?", "spoken_numbers?"],
+                "outputs": ["output", "sha256", "size", "timeline", "observation", "conformance?", "spoken_numbers?"],
                 "formats": list(SUPPORTED_FORMATS),
                 "ttml_profiles": {"ttml": IMSC11_TEXT_PROFILE, "ebu-tt-d": EBU_TT_D_STANDARD},
             },
@@ -131,7 +140,18 @@ def build_contract() -> dict:
                     "(INVALID_INPUT, the field named) for a cue without them. A soft track, a burn through this "
                     "skill's own ASS (`placement`, `regional_profile`, cue `ruby`, `caption_profile`) and `animate` "
                     "with `karaoke: \"word\"` are refused with the reason; the response's `animation` records the "
-                    "values and the caption flags sent. Without either field the call to ffmpeg-skill is unchanged."
+                    "values and the caption flags sent. Without either field the call to ffmpeg-skill is unchanged. "
+                    "docs/adr/ADR-013-caption-quality.md (each opt-in; without them nothing changes): `cuts` "
+                    "keeps every cue (and shorts chunk) off a hard cut, the cut times read from a media-analysis "
+                    "`scene_detection` result (`cuts.shots`) or measured with ffmpeg scdet (`cuts.detect`); a "
+                    "cue is split at the cut, or its start or end moved to it, never below `cuts.min_duration`, "
+                    "and every change is in the response's `cuts`. `spoken_numbers` writes number phrases as "
+                    "one token that is never split across lines or cues. `emphasis` (off|auto|numbers|words; "
+                    "burn) highlights at most one word per cue (two on a long cue), never a filler word, each "
+                    "with a reason in the response's `emphasis.marks`. `legibility: \"auto\"` (burn) measures "
+                    "the frames behind each cue's text and adds a halo or a scrim box only where the contrast is "
+                    "too low, reported per cue in `legibility`. emphasis, legibility and a written number with a "
+                    "space burn through this skill's own ASS, so they are refused with `animate`/`karaoke`."
                 ),
                 "inputs": [
                     "video_input",
@@ -147,10 +167,15 @@ def build_contract() -> dict:
                     "fonts_dir?",
                     "animate?",
                     "karaoke?",
+                    "cuts?",
+                    "spoken_numbers?",
+                    "emphasis?",
+                    "legibility?",
                 ],
                 "outputs": [
                     "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
-                    "regional_profile?", "caption_profile?", "fonts_dir?", "animation?",
+                    "regional_profile?", "caption_profile?", "fonts_dir?", "animation?", "cuts?", "spoken_numbers?",
+                    "emphasis?", "legibility?",
                 ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
@@ -165,6 +190,29 @@ def build_contract() -> dict:
                     "karaoke": list(KARAOKE_STYLES),
                     "for": "mode 'burn' of an SRT; karaoke needs every cue's words",
                     "engine_flags": ["--animate", "--karaoke", "--karaoke-style", "--karaoke-timing"],
+                },
+                "cuts": {
+                    "fields": sorted(CUTS_FIELDS),
+                    "shots_schema": SHOTS_SCHEMA,
+                    "shots_kind": SHOTS_KIND,
+                    "detect": {"filter": "scdet", "threshold": CUTS_THRESHOLD, "min_scene": CUTS_MIN_SCENE},
+                    "actions": ["split", "start_moved", "end_moved"],
+                },
+                "spoken_numbers": {"locales": list(NUMBER_LOCALES)},
+                "emphasis": {
+                    "modes": list(EMPHASIS_MODES),
+                    "default_color": EMPHASIS_COLOR,
+                    "max_per_cue": MAX_MARKS,
+                    "max_per_long_cue": MAX_MARKS_LONG,
+                    "long_cue_words": LONG_CUE_WORDS,
+                    "for": "mode 'burn'",
+                },
+                "legibility": {
+                    "modes": list(LEGIBILITY_MODES),
+                    "treatments": ["none", "halo", "scrim"],
+                    "scrim_below_contrast": SCRIM_BELOW,
+                    "halo_below_contrast": HALO_BELOW,
+                    "for": "mode 'burn'",
                 },
             },
             "translate": {
@@ -257,6 +305,10 @@ def build_contract() -> dict:
             "ruby": True,
             "fonts_dir": True,
             "animated_captions": True,
+            "cut_aware_cues": True,
+            "spoken_numbers": list(NUMBER_LOCALES),
+            "emphasis": True,
+            "legibility": True,
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -283,7 +335,7 @@ def build_contract() -> dict:
             "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
             "render": [
                 "mode", "audio_stream", "placement", "regional_profile", "caption_profile", "fonts_dir", "animate",
-                "karaoke",
+                "karaoke", "cuts", "spoken_numbers", "emphasis", "legibility",
             ],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],

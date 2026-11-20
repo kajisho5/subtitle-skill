@@ -294,6 +294,40 @@ These are refused with the reason, never burned static:
 The response's `animation` records the values and the exact caption flags
 sent. Without either field the call to ffmpeg-skill is the same as before.
 
+### Caption quality for talking-head video (`cuts`, `spoken_numbers`, `emphasis`, `legibility`)
+
+Four opt-in `render` fields ([ADR-013](docs/adr/ADR-013-caption-quality.md));
+without them the burn is the burn it was:
+
+```json
+"cuts": {"shots": "analysis/scenes.json"},
+"spoken_numbers": "en",
+"emphasis": "auto",
+"legibility": "auto"
+```
+
+- **`cuts`**: no cue (and no shorts chunk) stays on screen across a hard
+  cut. The cuts come from a media-analysis-skill `scene_detection` result, or
+  `{"detect": true}` measures them with ffmpeg `scdet`. A cue is split at the
+  cut, or its start or end moves to it, never below `min_duration`; the
+  response's `cuts.changes` lists every move. Burn and mux.
+- **`spoken_numbers: "en"`** (also `generate`): "five thousand dollars" →
+  `$5,000`, "forty percent" → `40%`, "twenty twenty-four" → `2024`, "May
+  fifth" → `May 5`. A written form is one token: a no-break space inside it
+  and one merged word timing, so it is never split across lines or cues.
+- **`emphasis`**: `auto` highlights a number or amount, else a proper name,
+  else a contrast word; `numbers`; or your own `words`. One per cue (two on a
+  long cue), never a filler, each with a reason in `emphasis.marks`, which you
+  can edit and send back.
+- **`legibility: "auto"`**: the frames behind each cue's text are measured
+  (WCAG contrast, 90th-percentile luminance); a halo or a scrim box is added
+  only where the text would not read, and `legibility.cues` reports what was
+  measured and added.
+
+emphasis, legibility and a written number with a space need per-word or
+per-cue drawing, so they burn through subtitle-skill's own ASS and are refused
+with `animate` / `karaoke`.
+
 ### Ruby, vertical text and regional profiles
 
 Cues can carry ruby (`"ruby": [{"base": "字幕", "text": "じまく"}]`) and
@@ -698,6 +732,7 @@ wanted, belongs to whoever is driving the render.
 | **ffmpeg-skill compatibility checked daily** | `scripts/check_vendor_drift.py` (`.github/workflows/vendor-drift.yml`) clones current ffmpeg-skill main, and the v3.0.0 tag, and runs the test suite against each, separately from normal-PR CI (ffmpeg-skill 3.x needs Python 3.10+ and FFmpeg 6.1+; the `>=1.0` contract_version range already admits its `contract_version` 2.0); a new release fails it only if subtitle-skill actually breaks |
 | **7 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11, plus one Ubuntu job with ffmpeg and a Japanese font that runs every burn and mux test against the vendored ffmpeg-skill |
 | **burn from a fonts directory** | under a fontconfig with no Japanese font, a Japanese burn without `fonts_dir` fails with the engine's reason and the field to set; with a font file in `fonts_dir` it draws the text (two different captions give different frames, which empty boxes do not), through the SRT and the ASS path |
+| **caption quality** | a lavfi clip with a hard cut mid-cue: the cue is split on the cut frame (scdet or a media-analysis document); bright and dark shots: a scrim only on the bright one, measured on the decoded frames, and an all-dark burn byte-identical with and without `legibility`; spoken number phrases written as one token that stays on one line when the caption wraps |
 | **animated captions** | one burn per `animate` mode and per `karaoke` style on a lavfi clip; the decoded frames show the caption absent on the cue's first frame, partial inside the entrance and full after it, and the karaoke highlight following the cue's `words` |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 
@@ -753,7 +788,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption` |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption`; [ADR-013](docs/adr/ADR-013-caption-quality.md): cut-aware cues, spoken numbers, emphasis, automatic legibility (and the evaluation of style presets and text behind the speaker) |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope

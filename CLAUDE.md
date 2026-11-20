@@ -242,6 +242,22 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Caption quality for talking-head video** (ECOSYSTEM_ROADMAP step 13,
+  `docs/adr/ADR-013-caption-quality.md`; `cuts.py`, `numbers.py`,
+  `emphasis.py`, `legibility.py`, `formats.ass.Look`). Opt-in `render` fields
+  `cuts` (media-analysis `scene_detection` or ffmpeg `scdet`; cues split or
+  moved at hard cuts), `spoken_numbers` (also `generate`; English rules,
+  U+00A0 inside a written form, merged word timings), `emphasis`
+  (`auto`/`numbers`/`words`, one mark per cue, reasons in the response) and
+  `legibility: "auto"` (frames sampled behind each cue; halo or drawn scrim
+  rectangle only where WCAG contrast is low). Emphasis, legibility and a
+  spaced number burn through this skill's ASS (`WrapStyle: 0` only then) and
+  are refused with `animate`/`karaoke`. `cuts.detect` and `legibility` run
+  ffmpeg directly, decode only. Without the fields: same argv, same identity
+  keys (`tests/test_caption_quality.py`). Additive contract change: re-pin
+  needed. Not done: style presets (step 14) and text behind the speaker
+  (evaluated in the ADR only).
+
 - **Animated captions from cues** (ECOSYSTEM_ROADMAP step 12,
   `docs/adr/ADR-011-animated-captions.md`): `render` `animate` /
   `karaoke` are passed through to ffmpeg-skill `caption --animate` /
@@ -449,7 +465,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 379 tests, `pytest -q`, all passing with ffmpeg and a Japanese
+At last update: 521 tests, `pytest -q`, all passing with ffmpeg and a Japanese
 font installed; CI green on Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs,
 which have no ffmpeg and skip the burn and mux tests) plus the `real-engine`
 job that runs them (`.github/workflows/ci.yml`).
