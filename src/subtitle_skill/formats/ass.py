@@ -96,10 +96,78 @@ def _overrides(cue: SubtitleCue) -> str:
     return tags
 
 
-def _cue_body(cue: SubtitleCue) -> str:
-    body = escape_text("".join(seg for seg, _reading in display_segments(cue)))
-    tags = _overrides(cue)
+def _cue_body(cue: SubtitleCue, marks=None, look=None) -> str:
+    text = "".join(seg for seg, _reading in display_segments(cue))
+    body = _marked_text(cue, text, marks, look) if marks else escape_text(text)
+    tags = _overrides(cue) + (look.event_tags(cue.id) if look is not None else "")
     return ("{" + tags + "}" if tags else "") + body
+
+
+_SPACES = re.compile(r"([ \t\n]+)")
+
+
+def _marked_text(cue: SubtitleCue, text: str, marks, look) -> str:
+    """`text` with the tokens at `marks` (indexes of its space-separated tokens; a no-break
+    space does not separate) drawn in the highlight colour and bold, then set back to the
+    cue's own colour and weight (docs/adr/ADR-013-caption-quality.md, emphasis)."""
+    from ..emphasis import split_edges
+
+    restore_color = ass_color(cue.style.color if cue.style is not None and cue.style.color else look.base_color)
+    restore_bold = 1 if (cue.style is not None and cue.style.bold) or look.base_bold else 0
+    highlight = ass_color(look.highlight_color)
+    out = ""
+    k = 0
+    for piece in _SPACES.split(text):
+        if not piece:
+            continue
+        if _SPACES.fullmatch(piece):
+            out += escape_text(piece)
+            continue
+        if k in marks:
+            lead, core, trail = split_edges(piece)
+            out += (escape_text(lead) + "{\\c" + highlight[:2] + highlight[4:] + "&\\b1}" + escape_text(core)
+                    + "{\\c" + restore_color[:2] + restore_color[4:] + f"&\\b{restore_bold}}}" + escape_text(trail))
+        else:
+            out += escape_text(piece)
+        k += 1
+    return out
+
+
+class Look:
+    """Per-cue emphasis marks and legibility treatments for an ASS burn
+    (docs/adr/ADR-013-caption-quality.md). Empty, it changes nothing."""
+
+    def __init__(self, *, marks=None, highlight_color: str = "FFD200", treatments=None, outline: int = 1,
+                 base_color: Optional[str] = None, base_bold: bool = False, boxes=None):
+        self.marks = marks or {}
+        self.highlight_color = highlight_color
+        self.treatments = treatments or {}
+        self.outline = outline
+        self.base_color = base_color or DEFAULT_COLOR
+        self.base_bold = base_bold
+        self.boxes = boxes or {}
+
+    def event_tags(self, cue_id: str) -> str:
+        if self.treatments.get(cue_id) == "halo":
+            from ..legibility import HALO_BLUR_SCALE, HALO_OUTLINE_SCALE
+
+            return f"\\bord{max(2, round(self.outline * HALO_OUTLINE_SCALE))}\\blur{max(1, round(self.outline * HALO_BLUR_SCALE))}"
+        return ""
+
+    def scrim_event(self, cue_id: str, start: str, end: str) -> Optional[str]:
+        """A scrim: one semi-opaque dark rectangle on layer 0 over the cue's measured text box
+        (a BorderStyle 3 box is drawn per glyph run, so a highlighted word left darker seams)."""
+        box = self.boxes.get(cue_id) if self.treatments.get(cue_id) == "scrim" else None
+        if box is None:
+            return None
+        from ..legibility import SCRIM_ALPHA
+
+        x, y, w, h = box
+        return (f"Dialogue: 0,{start},{end},Default,,0,0,0,,{{\\an7\\pos({x},{y})\\p1\\bord0\\shad0"
+                f"\\1c&H000000&\\1a&H{SCRIM_ALPHA:02X}&}}m 0 0 l {w} 0 {w} {h} 0 {h}{{\\p0}}")
+
+    def layer(self, cue_id: str) -> int:
+        return 1 if self.treatments.get(cue_id) == "scrim" else 0
 
 
 #: libass sizes a font by its ascent + descent; Noto Sans CJK's is 1.448 em, so one
@@ -166,12 +234,17 @@ def generate_ass(
     positions: Optional[Mapping[str, str]] = None,
     style: Optional[SubtitleStyle] = None,
     font: Optional[str] = None,
+    look: Optional[Look] = None,
+    wrap: bool = False,
 ) -> str:
     """The document as one ASS script for a `width` x `height` video.
 
     `positions` maps a cue id to "bottom" (default) or "top". `style` is the
     document-wide color/bold/size `render` already reduced (size in percent of
-    the 288-line script, as for the SRT path)."""
+    the 288-line script, as for the SRT path). `look` carries emphasis marks and
+    legibility treatments, and `wrap` lets libass wrap long lines (WrapStyle 0; it
+    never breaks at a no-break space) instead of only at the text's own breaks;
+    both are for docs/adr/ADR-013-caption-quality.md and change nothing when unset."""
     if width <= 0 or height <= 0:
         raise SubtitleSkillError("INVALID_INPUT", "ASS burn needs the video's width and height")
     positions = positions or {}
@@ -189,13 +262,17 @@ def generate_ass(
     margin_v = _scaled(DEFAULT_MARGIN_POINTS, height)
     margin_lr = max(1, round(width * SIDE_MARGIN))
     outline = _scaled(DEFAULT_OUTLINE_POINTS, height)
+    if look is not None:
+        look.outline = outline
+        look.base_color = color or DEFAULT_COLOR
+        look.base_bold = bold
     header = [
         "[Script Info]",
         "; written by subtitle-skill",
         "ScriptType: v4.00+",
         f"PlayResX: {width}",
         f"PlayResY: {height}",
-        "WrapStyle: 2",
+        f"WrapStyle: {0 if wrap else 2}",
         "ScaledBorderAndShadow: yes",
         "YCbCr Matrix: None",
         "",
@@ -220,17 +297,31 @@ def generate_ass(
                 "UNSUPPORTED_FORMAT", f"cue {cue.id}: vertical text is written to TTML/WebVTT, not burned in"
             )
         start, end = _timestamp(cue.start), _timestamp(cue.end)
+        layer = 0
+        if look is not None:
+            scrim = look.scrim_event(cue.id, start, end)
+            if scrim is not None:
+                events.append(scrim)
+            layer = look.layer(cue.id)
         if cue.ruby:
-            events.extend(_ruby_events(cue, start=start, end=end, position=position, width=width,
-                                       height=height, font_size=font_size, margin_v=margin_v))
+            ruby = _ruby_events(cue, start=start, end=end, position=position, width=width,
+                                height=height, font_size=font_size, margin_v=margin_v)
+            if look is not None:
+                # the line events are layer 0 and the readings layer 1; over a scrim, one higher
+                tags = look.event_tags(cue.id)
+                ruby = [f"Dialogue: {int(e[10]) + layer}," + e[12:].replace("{\\an2", "{\\an2" + tags, 1)
+                        for e in ruby]
+            events.extend(ruby)
             continue
         prefix = "{\\an8}" if position == "top" else ""
-        events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue)}")
+        marks = look.marks.get(cue.id) if look is not None else None
+        events.append(f"Dialogue: {layer},{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue, marks, look)}")
     return "\n".join(header + events) + "\n"
 
 
 def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
-                        positions: Optional[Mapping[str, str]] = None, font: Optional[str] = None) -> str:
+                        positions: Optional[Mapping[str, str]] = None, font: Optional[str] = None,
+                        look: Optional[Look] = None) -> str:
     """The `shorts` caption profile (roadmap step 11, ADR-009) as ASS: one event per
     one-or-two-word cue, bold, large, at a fixed `\\\\pos` inside the 9:16 safe zone
     (`shorts.ShortsLayout`), drawn smaller when it would not fit the safe width."""
@@ -242,6 +333,10 @@ def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
     boxes = layout.caption_boxes()
     positions = positions or {}
     outline = max(1, round(OUTLINE * height))
+    if look is not None:
+        look.outline = outline
+        look.base_color = DEFAULT_COLOR
+        look.base_bold = True
     header = [
         "[Script Info]",
         "; written by subtitle-skill (caption_profile shorts)",
@@ -272,8 +367,17 @@ def generate_shorts_ass(document: SubtitleDocument, *, width: int, height: int,
         y = (box.y + box.h) * height
         text = "".join(seg for seg, _r in display_segments(cue))
         size = layout.fit_font_size(text)
+        marks = look.marks.get(cue.id) if look is not None else None
+        tags = _overrides(cue) + (look.event_tags(cue.id) if look is not None else "")
+        body = _marked_text(cue, text, marks, look) if marks else escape_text(text)
+        layer = 0
+        if look is not None:
+            scrim = look.scrim_event(cue.id, _timestamp(cue.start), _timestamp(cue.end))
+            if scrim is not None:
+                events.append(scrim)
+            layer = look.layer(cue.id)
         events.append(
-            f"Dialogue: 0,{_timestamp(cue.start)},{_timestamp(cue.end)},Default,,0,0,0,,"
-            f"{{\\an2\\pos({cx:.0f},{y:.0f})\\fs{size}{_overrides(cue)}}}{escape_text(text)}"
+            f"Dialogue: {layer},{_timestamp(cue.start)},{_timestamp(cue.end)},Default,,0,0,0,,"
+            f"{{\\an2\\pos({cx:.0f},{y:.0f})\\fs{size}{tags}}}{body}"
         )
     return "\n".join(header + events) + "\n"
