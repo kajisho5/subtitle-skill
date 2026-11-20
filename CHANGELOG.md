@@ -1,3 +1,11 @@
+## v0.11.0 - 2026-11-20
+
+- feat(render): caption quality for talking-head video (roadmap step 13) (#50) (31af99e)
+- ci: a contract:breaking pull request on 1.x needs the major label (Velisa ADR-031 section 5) (#49) (c54fad6)
+- ci: release gate leaves contract:* labels out of the count (#48) (5417e1e)
+- ci: Velisa's reusable changelog-check/release-guard; dependencies PRs release a patch (D36, D37) (#47) (040b82b)
+- ci(release): test the release commit before pushing; no release for chore/ci/docs-only changes (#46) (e0a7650)
+
 ## v0.10.3 - 2026-11-19
 
 - ci: run contract-diff on every pull request (#44) (c3e4ca0)
