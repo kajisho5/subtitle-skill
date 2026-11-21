@@ -241,6 +241,9 @@ can omit `constraints` entirely.
     them. `karaoke` needs `words: [{text, start, end}]` on every cue, one per
     space-separated word of the drawn text (a speaker prefix counts);
     otherwise `INVALID_INPUT` with `details.field` `subtitle.cues[N].words`.
+    `karaoke` on cues whose times overlap is `INVALID_INPUT` with
+    `details.field` `subtitle.cues[N].start` (the later cue) and
+    `details.conflicts_with` the cue it overlaps.
     Refused with `INVALID_INPUT` and `details.conflicts_with`: `mode: "mux"`,
     `placement`, `regional_profile`, cue `ruby`, `caption_profile`, and
     `animate` together with `karaoke: "word"`. Drop the conflicting field
