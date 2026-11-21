@@ -798,6 +798,20 @@ def _caption_source(root: Path) -> str:
         return ""
 
 
+# ffmpeg-skill 4.1+ (its A55): `--mode mux` adds the cues as they are, never
+# wrapping or splitting them, and refuses a `--max-lines` other than its
+# default as a layout flag that would do nothing. This is the refusal's text.
+_MUX_KEEPS_CUES_MARKER = "--mode mux adds the cues as they are"
+
+
+def _caption_splits_mux_cues(source: str) -> bool:
+    """True when this caption.py splits a cue past `--max-lines` in
+    `--mode mux` too, so mux_tracks must raise `--max-lines` above the
+    tallest cue. False for a caption.py with no `--max-lines` at all, and for
+    ffmpeg-skill 4.1+, which leaves mux cues as they are and refuses the flag."""
+    return '"--max-lines"' in source and _MUX_KEEPS_CUES_MARKER not in source
+
+
 def caption_supports_multitrack(root: Path) -> bool:
     """ffmpeg-skill 1.16+: `--srt` repeatable with a `:lang` suffix,
     `--track-title`, `--default-track` (its CHANGELOG 1.16.0)."""
@@ -822,8 +836,10 @@ def mux_tracks(
 
     The SRT files are subtitle-skill's own, already laid out and validated, so
     caption.py is told not to re-time them: `--min-duration 0` (its default
-    lengthens cues shorter than 1 s) and a `--max-lines` no cue reaches (its
-    default splits a cue past 2 lines). Without these the FIRST track -- the
+    lengthens cues shorter than 1 s) and, where caption.py still splits mux
+    cues, a `--max-lines` no cue reaches (its default splits a cue past 2
+    lines; ffmpeg-skill 4.1+ no longer splits mux cues and refuses the flag,
+    so it is left out there). Without these the FIRST track -- the
     only one caption.py lays out -- would come out with different timing from
     the others.
 
@@ -883,7 +899,7 @@ def mux_tracks(
     source = _caption_source(root)
     if '"--min-duration"' in source:
         argv += ["--min-duration", "0"]
-    if '"--max-lines"' in source:
+    if _caption_splits_mux_cues(source):
         argv += ["--max-lines", str(max_lines + 1)]
     if _caption_takes_overwrite(root):
         argv.append("--overwrite")

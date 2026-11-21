@@ -124,14 +124,18 @@ def test_translate_then_mux_pipeline(tmp_path, ffmpeg_skill_install):
     en = _extract_srt(Path(resp["output"]), 1, tmp_path / "en.srt")
     assert "00:00:04,500 --> 00:00:09,000" in en
     assert "A word in the term list always\ngets the same translation." in en
-    # The Japanese first track has lines wider than a 64 px frame. caption.py
-    # re-wraps the first track for the frame and has no switch to stop it; the
-    # timing must still pass through, and the re-wrap must be reported.
+    # The Japanese first track has lines wider than a 64 px frame. A caption.py
+    # before ffmpeg-skill 4.1 re-wraps the first track for the frame and has no
+    # switch to stop it; the timing must still pass through, and the re-wrap
+    # must be reported. ffmpeg-skill 4.1+ muxes the cues as they are (#37).
     ja = _extract_srt(Path(resp["output"]), 0, tmp_path / "ja.srt")
     assert "00:00:00,500 --> 00:00:03,000" in ja
     assert "00:00:04,500 --> 00:00:09,000" in ja
     relaid = [o for o in resp["observation"] if o["code"] == "TRACK_RELAID_OUT"]
-    assert [o["cue_id"] for o in relaid] == ["ja"]
+    from subtitle_skill.engine import _MUX_KEEPS_CUES_MARKER
+
+    rewraps = _MUX_KEEPS_CUES_MARKER not in (ffmpeg_skill_install / "scripts" / "caption.py").read_text(encoding="utf-8")
+    assert [o["cue_id"] for o in relaid] == (["ja"] if rewraps else [])
     again = execute(_mux_request(tmp_path, tracks=[{"subtitle": fx["source"]}, {"subtitle": translated["subtitle"]}]))
     assert again["reused"] is True
     assert [o["code"] for o in again["observation"]] == [o["code"] for o in resp["observation"]]
@@ -219,3 +223,16 @@ def test_contract_advertises_mux_and_translate():
     assert contract["capabilities"]["translation_engines"] == ["argos", "deepl", "memory", "opus-mt", "ollama"]
     assert contract["operations"]["translate"]["default_engine"] == "argos"
     assert contract["parameters"]["mux"] == ["tracks", "default_language", "audio_stream"]
+
+
+def test_mux_raises_max_lines_only_where_caption_splits_mux_cues():
+    """#37: ffmpeg-skill 4.1+ adds mux cues as they are and refuses any
+    `--max-lines` other than its default with --mode mux. An older caption.py
+    still splits a mux cue past --max-lines, so there it is raised."""
+    from subtitle_skill.engine import _caption_splits_mux_cues
+
+    old = 'sty.add_argument("--max-lines", type=int, default=2)'
+    new = old + '\ndie(f"{asked} lays out burned captions; --mode mux adds the cues as they are and the player wraps")'
+    assert _caption_splits_mux_cues(old) is True
+    assert _caption_splits_mux_cues(new) is False
+    assert _caption_splits_mux_cues("no layout flags here") is False
