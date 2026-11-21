@@ -26,6 +26,8 @@ from .cuts import RESPONSE_SCHEMA as SHOTS_SCHEMA, SHOTS_KIND
 from .emphasis import DEFAULT_COLOR as EMPHASIS_COLOR, LONG_CUE_WORDS, MAX_MARKS, MAX_MARKS_LONG
 from .emphasis import MODES as EMPHASIS_MODES
 from .legibility import HALO_BELOW, MODES as LEGIBILITY_MODES, SCRIM_BELOW
+from .style_presets import ANIMATIONS as PRESET_ANIMATIONS, BOXES as PRESET_BOXES, BUNDLED as PRESETS_BUNDLED
+from .style_presets import CASES as PRESET_CASES, FIELDS as PRESET_FIELDS, POSITIONS as PRESET_POSITIONS
 from .numbers import LOCALES as NUMBER_LOCALES
 
 OPERATIONS = ("generate", "render", "translate", "mux")
@@ -159,7 +161,15 @@ def build_contract() -> dict:
                     "with a reason in the response's `emphasis.marks`. `legibility: \"auto\"` (burn) measures "
                     "the frames behind each cue's text and adds a halo or a scrim box only where the contrast is "
                     "too low, reported per cue in `legibility`. emphasis, legibility and a written number with a "
-                    "space burn through this skill's own ASS, so they are refused with `animate`/`karaoke`."
+                    "space burn through this skill's own ASS, so they are refused with `animate`/`karaoke`. "
+                    "`style_preset` (docs/adr/ADR-015-style-presets.md; opt-in, burn only) is a named caption look: "
+                    "a bundled preset or `{\"path\": \"<workspace JSON>\"}`, the caller's own file read against an "
+                    "allowlist (unknown keys, paths and override tags are INVALID_INPUT naming the key). It sets the "
+                    "font family chain, size, outline and shadow and margin in percent of the frame height, colours, "
+                    "case, position, a box and the emphasis highlight, and burns through this skill's own ASS. "
+                    "Explicit request fields (cue `style`, `emphasis.color`, `fonts_dir`, `placement`) override the "
+                    "preset, and the preset overrides the defaults; the response's `style_preset` records the values "
+                    "and the family named."
                 ),
                 "inputs": [
                     "video_input",
@@ -179,11 +189,12 @@ def build_contract() -> dict:
                     "spoken_numbers?",
                     "emphasis?",
                     "legibility?",
+                    "style_preset?",
                 ],
                 "outputs": [
                     "output", "sha256", "size", "timeline", "observation", "engine", "mode", "placement?",
                     "regional_profile?", "caption_profile?", "fonts_dir?", "animation?", "cuts?", "spoken_numbers?",
-                    "emphasis?", "legibility?",
+                    "emphasis?", "legibility?", "style_preset?",
                 ],
                 "formats": list(RENDER_SUPPORTED_FORMATS),
                 "delegates_to": {"skill_id": "ffmpeg-skill", "tool": "caption"},
@@ -220,6 +231,16 @@ def build_contract() -> dict:
                     "treatments": ["none", "halo", "scrim"],
                     "scrim_below_contrast": SCRIM_BELOW,
                     "halo_below_contrast": HALO_BELOW,
+                    "for": "mode 'burn'",
+                },
+                "style_preset": {
+                    "bundled": list(PRESETS_BUNDLED),
+                    "fields": sorted(PRESET_FIELDS),
+                    "cases": list(PRESET_CASES),
+                    "positions": list(PRESET_POSITIONS),
+                    "boxes": list(PRESET_BOXES),
+                    "animations": list(PRESET_ANIMATIONS),
+                    "units": "size, outline, shadow and margin in percent of the frame height",
                     "for": "mode 'burn'",
                 },
             },
@@ -321,6 +342,7 @@ def build_contract() -> dict:
             "spoken_numbers": list(NUMBER_LOCALES),
             "emphasis": True,
             "legibility": True,
+            "style_presets": list(PRESETS_BUNDLED),
             "path_policy": True,
             "provenance": True,
             "reuse": True,
@@ -347,7 +369,7 @@ def build_contract() -> dict:
             "regional_profiles": {name: p.to_dict() for name, p in sorted(REGIONAL_PROFILES.items())},
             "render": [
                 "mode", "audio_stream", "placement", "regional_profile", "caption_profile", "fonts_dir", "animate",
-                "karaoke", "cuts", "spoken_numbers", "emphasis", "legibility",
+                "karaoke", "cuts", "spoken_numbers", "emphasis", "legibility", "style_preset",
             ],
             "translate": ["target_language", "engine", "glossary", "translation_memory"],
             "mux": ["tracks", "default_language", "audio_stream"],

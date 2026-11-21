@@ -1,0 +1,16 @@
+{
+  "name": "boxed",
+  "font": ["DejaVu Sans", "Liberation Sans", "Noto Sans"],
+  "size": 6.5,
+  "color": "FFFFFF",
+  "outline_color": "000000",
+  "outline": 0.8,
+  "shadow": 0,
+  "case": "none",
+  "position": "bottom",
+  "margin": 7,
+  "bold": false,
+  "box": "scrim",
+  "highlight": {"color": "FFD200", "bold": true},
+  "animation": "none"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "minimal-serif",
+  "font": ["DejaVu Serif", "Liberation Serif", "Noto Serif"],
+  "size": 6,
+  "color": "F0E2C0",
+  "outline_color": "1A1A1A",
+  "outline": 0.15,
+  "shadow": 0.25,
+  "case": "none",
+  "position": "bottom",
+  "margin": 6,
+  "bold": false,
+  "box": "none",
+  "highlight": {"color": "E8B04A", "bold": false},
+  "animation": "none"
+}

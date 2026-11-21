@@ -46,7 +46,8 @@ These fields of `generate` and `render` stay experimental. Each may still change
 - **The other newer opt-in fields:**
   - `caption_profile: "shorts"` (ADR-009, 0.8.0);
   - `fonts_dir` (ADR-010, 0.9.0);
-  - `regional_profile`, cue `ruby` and `style.vertical` (ADR-008, 0.7.0).
+  - `regional_profile`, cue `ruby` and `style.vertical` (ADR-008, 0.7.0);
+  - `style_preset` (ADR-015, 1.1.0), added after 1.0 as this section allows.
 
   Each has been out for two weeks or less. Each is an opt-in convention that an additional profile or platform may still reshape. One example is the shorts safe zone, which is the zone the platforms share today.
 

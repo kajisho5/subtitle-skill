@@ -35,7 +35,7 @@ subtitle-skill = "subtitle_skill.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-subtitle_skill = ["SKILL.md"]
+subtitle_skill = ["SKILL.md", "presets/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

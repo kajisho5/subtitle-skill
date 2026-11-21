@@ -82,13 +82,16 @@ def _scaled(points: float, height: int) -> int:
     return max(1, round(points * height / SCRIPT_HEIGHT))
 
 
-def _overrides(cue: SubtitleCue) -> str:
+def _overrides(cue: SubtitleCue, base_bold: bool = False) -> str:
     """Per-event style: bold/italic and a cue's own colour (a regional profile's
-    speaker colour arrives as one)."""
+    speaker colour arrives as one). `base_bold` is a style preset's weight: a cue's
+    explicit `bold: false` then sets it back (the cue's own style wins)."""
     tags = ""
     if cue.style is not None:
         if cue.style.bold:
             tags += "\\b1"
+        elif cue.style.bold is False and base_bold:
+            tags += "\\b0"
         if cue.style.italic:
             tags += "\\i1"
         if cue.style.color is not None:
@@ -96,10 +99,13 @@ def _overrides(cue: SubtitleCue) -> str:
     return tags
 
 
-def _cue_body(cue: SubtitleCue, marks=None, look=None) -> str:
+def _cue_body(cue: SubtitleCue, marks=None, look=None, preset=None) -> str:
     text = "".join(seg for seg, _reading in display_segments(cue))
+    if preset is not None:
+        text = preset.apply_case(text)
     body = _marked_text(cue, text, marks, look) if marks else escape_text(text)
-    tags = _overrides(cue) + (look.event_tags(cue.id) if look is not None else "")
+    tags = (_overrides(cue, preset.bold if preset is not None else False)
+            + (look.event_tags(cue.id) if look is not None else ""))
     return ("{" + tags + "}" if tags else "") + body
 
 
@@ -113,8 +119,11 @@ def _marked_text(cue: SubtitleCue, text: str, marks, look) -> str:
     from ..emphasis import split_edges
 
     restore_color = ass_color(cue.style.color if cue.style is not None and cue.style.color else look.base_color)
-    restore_bold = 1 if (cue.style is not None and cue.style.bold) or look.base_bold else 0
+    # a cue's explicit `bold: false` wins over a style preset's weight (only then; see _overrides)
+    explicit_off = look.bold_off_wins and cue.style is not None and cue.style.bold is False
+    restore_bold = 1 if ((cue.style is not None and cue.style.bold) or look.base_bold) and not explicit_off else 0
     highlight = ass_color(look.highlight_color)
+    weight = "\\b1" if look.highlight_bold else f"\\b{restore_bold}"
     out = ""
     k = 0
     for piece in _SPACES.split(text):
@@ -125,7 +134,7 @@ def _marked_text(cue: SubtitleCue, text: str, marks, look) -> str:
             continue
         if k in marks:
             lead, core, trail = split_edges(piece)
-            out += (escape_text(lead) + "{\\c" + highlight[:2] + highlight[4:] + "&\\b1}" + escape_text(core)
+            out += (escape_text(lead) + "{\\c" + highlight[:2] + highlight[4:] + "&" + weight + "}" + escape_text(core)
                     + "{\\c" + restore_color[:2] + restore_color[4:] + f"&\\b{restore_bold}}}" + escape_text(trail))
         else:
             out += escape_text(piece)
@@ -138,7 +147,8 @@ class Look:
     (docs/adr/ADR-013-caption-quality.md). Empty, it changes nothing."""
 
     def __init__(self, *, marks=None, highlight_color: str = "FFD200", treatments=None, outline: int = 1,
-                 base_color: Optional[str] = None, base_bold: bool = False, boxes=None):
+                 base_color: Optional[str] = None, base_bold: bool = False, boxes=None,
+                 highlight_bold: bool = True):
         self.marks = marks or {}
         self.highlight_color = highlight_color
         self.treatments = treatments or {}
@@ -146,6 +156,8 @@ class Look:
         self.base_color = base_color or DEFAULT_COLOR
         self.base_bold = base_bold
         self.boxes = boxes or {}
+        self.highlight_bold = highlight_bold
+        self.bold_off_wins = False
 
     def event_tags(self, cue_id: str) -> str:
         if self.treatments.get(cue_id) == "halo":
@@ -176,6 +188,8 @@ class Look:
 CJK_EM_PER_FONTSIZE = 1 / 1.448
 RUBY_SCALE = 0.5
 LINE_ADVANCE = 1.25
+#: a style preset's `position` as an ASS alignment: bottom centre, top centre, bottom left
+PRESET_ALIGNMENT = {"bottom": 2, "top": 8, "lower-third": 1}
 
 
 def _advance(text: str, font_size: float) -> float:
@@ -236,6 +250,7 @@ def generate_ass(
     font: Optional[str] = None,
     look: Optional[Look] = None,
     wrap: bool = False,
+    preset=None,
 ) -> str:
     """The document as one ASS script for a `width` x `height` video.
 
@@ -244,7 +259,10 @@ def generate_ass(
     the 288-line script, as for the SRT path). `look` carries emphasis marks and
     legibility treatments, and `wrap` lets libass wrap long lines (WrapStyle 0; it
     never breaks at a no-break space) instead of only at the text's own breaks;
-    both are for docs/adr/ADR-013-caption-quality.md and change nothing when unset."""
+    both are for docs/adr/ADR-013-caption-quality.md and change nothing when unset.
+    `preset` (a `style_presets.Preset`, docs/adr/ADR-015-style-presets.md) sets the
+    style line: size, colours, outline, shadow, box, weight, alignment and margin, in
+    percent of the height; `style.size` and `font` still override it. None changes nothing."""
     if width <= 0 or height <= 0:
         raise SubtitleSkillError("INVALID_INPUT", "ASS burn needs the video's width and height")
     positions = positions or {}
@@ -258,14 +276,33 @@ def generate_ass(
             size_points = style.size / 100.0 * SCRIPT_HEIGHT
         color = style.color
         bold = bool(style.bold)
+    if (style is None or style.size is None) and preset is not None and preset.size is not None:
+        size_points = preset.size / 100.0 * SCRIPT_HEIGHT
     font_size = _scaled(size_points, height)
     margin_v = _scaled(DEFAULT_MARGIN_POINTS, height)
     margin_lr = max(1, round(width * SIDE_MARGIN))
     outline = _scaled(DEFAULT_OUTLINE_POINTS, height)
+    outline_field, shadow_field, alignment, border_style = str(outline), "0", 2, 1
+    outline_color = DEFAULT_OUTLINE_COLOR
+    if preset is not None:
+        color = color or preset.color
+        bold = bold or preset.bold
+        outline_color = preset.outline_color
+        if preset.outline is not None:
+            outline_px = preset.outline / 100.0 * height
+            outline_field = f"{round(outline_px, 2):g}"
+            outline = max(1, round(outline_px))
+        if preset.shadow is not None:
+            shadow_field = f"{round(preset.shadow / 100.0 * height, 2):g}"
+        if preset.margin is not None:
+            margin_v = max(0, round(preset.margin / 100.0 * height))
+        alignment = PRESET_ALIGNMENT[preset.position]
+        border_style = 3 if preset.box == "scrim" else 1
     if look is not None:
         look.outline = outline
         look.base_color = color or DEFAULT_COLOR
         look.base_bold = bold
+        look.bold_off_wins = preset is not None
     header = [
         "[Script Info]",
         "; written by subtitle-skill",
@@ -281,8 +318,9 @@ def generate_ass(
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Default,{_style_font(font, document.language)},{font_size},{ass_color(color)},{ass_color(color)},"
-        f"{ass_color(DEFAULT_OUTLINE_COLOR)},{ass_color(DEFAULT_OUTLINE_COLOR, alpha=0x80)},"
-        f"{-1 if bold else 0},0,0,0,100,100,0,0,1,{outline},0,2,{margin_lr},{margin_lr},{margin_v},1",
+        f"{ass_color(outline_color)},{ass_color(outline_color, alpha=0x80)},"
+        f"{-1 if bold else 0},0,0,0,100,100,0,0,{border_style},{outline_field},{shadow_field},{alignment},"
+        f"{margin_lr},{margin_lr},{margin_v},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -315,7 +353,7 @@ def generate_ass(
             continue
         prefix = "{\\an8}" if position == "top" else ""
         marks = look.marks.get(cue.id) if look is not None else None
-        events.append(f"Dialogue: {layer},{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue, marks, look)}")
+        events.append(f"Dialogue: {layer},{start},{end},Default,,0,0,0,,{prefix}{_cue_body(cue, marks, look, preset)}")
     return "\n".join(header + events) + "\n"
 
 

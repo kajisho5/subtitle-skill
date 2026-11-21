@@ -279,6 +279,20 @@ can omit `constraints` entirely.
       this skill's own ASS: with `animate` / `karaoke` they are refused
       (`INVALID_INPUT`, `details.conflicts_with`). emphasis and legibility on
       a mux are refused too.
+    - `style_preset` (burn; docs/adr/ADR-015-style-presets.md): a named look,
+      `"clean-lower-third"`, `"bold-short-form"`, `"minimal-serif"`, `"boxed"`,
+      or `{"path": "<workspace JSON>"}` with your own preset. A preset file has
+      only `name`, `font` (family or chain), `size` / `outline` / `shadow` /
+      `margin` (percent of the frame height), `color`, `outline_color`, `case`,
+      `position` (`bottom`/`top`/`lower-third`), `bold`, `box`
+      (`none`/`scrim`), `highlight` (`{color, bold}` for `emphasis`) and
+      `animation` (`none`); any other key, a path or tags is `INVALID_INPUT`
+      with `details.field` naming it. Explicit fields win over the preset (cue
+      `style`, `emphasis.color`, `fonts_dir`, `placement`). Refused with
+      `conflicts_with`: mux, `animate`/`karaoke`, `caption_profile`, cue
+      `ruby`, a `top` preset with `placement`, `legibility` with a boxed
+      preset. The response's `style_preset` gives the values and
+      `font_family`.
 
 ## `translate` and `mux`
 

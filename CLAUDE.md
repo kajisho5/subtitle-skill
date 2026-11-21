@@ -21,7 +21,7 @@ duplicate that content here; this file is status, not spec.
 Velisa ADR-031): `subtitle.generate` and `subtitle.render` are `STABLE`;
 `subtitle.translate` and `subtitle.mux` stay `EXPERIMENTAL`, and so do the
 newer opt-in fields the ADR lists (ADR-013's, `animate`/`karaoke`, shorts,
-`fonts_dir`, regional profiles, ruby). A breaking change to a `STABLE`
+`fonts_dir`, regional profiles, ruby, and `style_preset` from 1.1.0). A breaking change to a `STABLE`
 part needs the `major` label (`major-label-check.yml`).
 
 ## Where this sits in the ecosystem
@@ -249,6 +249,20 @@ Ordered by value, not urgency:
 
 ### Done since the gaps above were first written
 
+- **Style presets as data** (ECOSYSTEM_ROADMAP step 14,
+  `docs/adr/ADR-015-style-presets.md`, `src/subtitle_skill/style_presets.py`,
+  `src/subtitle_skill/presets/*.json`). `render` `style_preset`: a bundled name
+  (`clean-lower-third`, `bold-short-form`, `minimal-serif`, `boxed`) or
+  `{"path": ...}`, read against an allowlist (unknown key / path / tags →
+  `INVALID_INPUT` naming `style_preset.<key>`). Sizes in percent of the frame
+  height; burns through this skill's ASS (`WrapStyle: 0`), so refused with
+  mux, `animate`/`karaoke`, shorts, ruby, a top preset with `placement`, and
+  `legibility` with a boxed preset. Explicit fields win over the preset. No font
+  bundled: the first family of the chain `fc-list` lists. Without the field the
+  ASS is byte-identical to 1.0.0's (golden files in `tests/fixtures/presets/`),
+  same argv, same identity keys (`tests/test_style_presets.py`). Experimental
+  (ADR-014 section 2). Additive contract change: re-pin needed.
+
 - **Caption quality for talking-head video** (ECOSYSTEM_ROADMAP step 13,
   `docs/adr/ADR-013-caption-quality.md`; `cuts.py`, `numbers.py`,
   `emphasis.py`, `legibility.py`, `formats.ass.Look`). Opt-in `render` fields
@@ -262,8 +276,8 @@ Ordered by value, not urgency:
   are refused with `animate`/`karaoke`. `cuts.detect` and `legibility` run
   ffmpeg directly, decode only. Without the fields: same argv, same identity
   keys (`tests/test_caption_quality.py`). Additive contract change: re-pin
-  needed. Not done: style presets (step 14) and text behind the speaker
-  (evaluated in the ADR only).
+  needed. Not done: text behind the speaker (evaluated in the ADR only).
+  Style presets (step 14) are done since, see above.
 
 - **Animated captions from cues** (ECOSYSTEM_ROADMAP step 12,
   `docs/adr/ADR-011-animated-captions.md`): `render` `animate` /
@@ -472,7 +486,7 @@ Ordered by value, not urgency:
 
 ## Test / CI state (verify, don't trust this number blindly)
 
-At last update: 521 tests, `pytest -q`, all passing with ffmpeg and a Japanese
+At last update: 588 tests, `pytest -q`, all passing with ffmpeg and a Japanese
 font installed; CI green on Ubuntu/macOS/Windows × Python 3.9/3.11 (6 jobs,
 which have no ffmpeg and skip the burn and mux tests) plus the `real-engine`
 job that runs them (`.github/workflows/ci.yml`).

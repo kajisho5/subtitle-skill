@@ -328,6 +328,38 @@ emphasis, legibility and a written number with a space need per-word or
 per-cue drawing, so they burn through subtitle-skill's own ASS and are refused
 with `animate` / `karaoke`.
 
+### Style presets (`render` `style_preset`)
+
+One opt-in `render` field gives a burn a named look
+([ADR-015](docs/adr/ADR-015-style-presets.md)): a bundled preset or your own
+JSON file in the workspace.
+
+```json
+"style_preset": "clean-lower-third"
+"style_preset": {"path": "brand/caption-look.json"}
+```
+
+- **Bundled:** `clean-lower-third` (white, bottom left), `bold-short-form`
+  (large, bold, upper case, raised above the platforms' bottom UI),
+  `minimal-serif` (small warm serif), `boxed` (white on an opaque black box).
+- **Your own file** is read against an allowlist: `name`, `font` (a family or
+  a fallback chain), `size`, `outline`, `shadow` and `margin` (percent of the
+  frame height), `color`, `outline_color`, `case` (`none`/`upper`/`lower`),
+  `position` (`bottom`/`top`/`lower-third`), `bold`, `box` (`none`/`scrim`),
+  `highlight` (`{color, bold}`, what `emphasis` draws) and `animation`
+  (`none`). Any other key, a path, or override tags is `INVALID_INPUT`, and
+  `details.field` names the key.
+- **Precedence:** explicit request fields win over the preset, and the preset
+  wins over the defaults. That covers cue `style.size` / `color` / `bold`,
+  `emphasis.color`, `fonts_dir`'s family and a `placement` move to the top.
+- **Fonts:** none bundled. The first family of the chain that fontconfig lists
+  is named (DejaVu, Liberation, Noto), and libass falls back per glyph.
+  `style_preset.font_family` in the response says which.
+- A preset burns through subtitle-skill's own ASS. It is refused, with
+  `details.conflicts_with`, with `mode: "mux"`, `animate` / `karaoke`,
+  `caption_profile`, cue `ruby`, `placement` for a `top` preset, and
+  `legibility` for a preset with a box. Without the field nothing changes.
+
 ### Ruby, vertical text and regional profiles
 
 Cues can carry ruby (`"ruby": [{"base": "字幕", "text": "じまく"}]`) and
@@ -733,6 +765,7 @@ wanted, belongs to whoever is driving the render.
 | **7 CI jobs green** | Ubuntu, macOS, Windows × Python 3.9, 3.11, plus one Ubuntu job with ffmpeg and a Japanese font that runs every burn and mux test against the vendored ffmpeg-skill |
 | **burn from a fonts directory** | under a fontconfig with no Japanese font, a Japanese burn without `fonts_dir` fails with the engine's reason and the field to set; with a font file in `fonts_dir` it draws the text (two different captions give different frames, which empty boxes do not), through the SRT and the ASS path |
 | **caption quality** | a lavfi clip with a hard cut mid-cue: the cue is split on the cut frame (scdet or a media-analysis document); bright and dark shots: a scrim only on the bright one, measured on the decoded frames, and an all-dark burn byte-identical with and without `legibility`; spoken number phrases written as one token that stays on one line when the caption wraps |
+| **style presets** | each bundled preset burned on a 640×360 lavfi clip; on the decoded frame the line pitch is within 10 % of the preset's size (23 px for 6.5 %, 32 px for 9 %), the text is in its colour and case, and it sits at its position and margin; `boxed` draws its box; with `emphasis`, a preset's highlight colour is drawn; a caller's file with an unknown key, a path or tags is refused naming the key; without the field the ASS is byte-identical to 1.0.0's and the caption call and identity are unchanged |
 | **animated captions** | one burn per `animate` mode and per `karaoke` style on a lavfi clip; the decoded frames show the caption absent on the cue's first frame, partial inside the entrance and full after it, and the karaoke highlight following the cue's `words` |
 | **cache correctness proven both directions** | a bare ffmpeg-skill version bump with unchanged scripts does *not* invalidate the cache; a script content change with an unbumped version *does* |
 
@@ -788,7 +821,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption`; [ADR-013](docs/adr/ADR-013-caption-quality.md): cut-aware cues, spoken numbers, emphasis, automatic legibility (and the evaluation of style presets and text behind the speaker); [ADR-014](docs/adr/ADR-014-1-0-compatibility-promise.md): the 1.0 compatibility promise, which entries and fields are `STABLE` |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption`; [ADR-013](docs/adr/ADR-013-caption-quality.md): cut-aware cues, spoken numbers, emphasis, automatic legibility (and the evaluation of text behind the speaker); [ADR-014](docs/adr/ADR-014-1-0-compatibility-promise.md): the 1.0 compatibility promise, which entries and fields are `STABLE`; [ADR-015](docs/adr/ADR-015-style-presets.md): style presets as data |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope
@@ -825,7 +858,7 @@ From 1.0.0 the release version follows the contract ([ADR-014](docs/adr/ADR-014-
   A breaking change to any of these ships only in a major release (2.0.0). An addition ships in a minor release. A release with no contract change is a patch.
 - **Experimental:**
   - the `EXPERIMENTAL` entries `subtitle/translate` (its model engines) and `subtitle/mux` (multi-language mux);
-  - these fields of the two `STABLE` tools: `cuts`, `spoken_numbers`, `emphasis`, `legibility`, `animate`, `karaoke`, cue `words`, `caption_profile`, `fonts_dir`, `regional_profile`, cue `ruby` and `style.vertical`. A field has no lifecycle in the contract, so this list is where its status is stated.
+  - these fields of the two `STABLE` tools: `cuts`, `spoken_numbers`, `emphasis`, `legibility`, `animate`, `karaoke`, cue `words`, `caption_profile`, `fonts_dir`, `regional_profile`, cue `ruby`, `style.vertical` and `style_preset` (1.1.0, [ADR-015](docs/adr/ADR-015-style-presets.md)). A field has no lifecycle in the contract, so this list is where its status is stated.
 
   These may still change in a minor release, and the CHANGELOG entry names the change. An entry or field is promoted to `STABLE` in any release, with no shape change. The `provides[].lifecycle` field in `contract/contract.json` gives each entry's status.
 - **Deprecation:** a `STABLE` entry or field is first marked `DEPRECATED` in a minor release, with its replacement named here and in the CHANGELOG. It keeps working for at least one more minor release and 30 days. Only a major release removes it.
