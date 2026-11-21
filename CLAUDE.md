@@ -17,6 +17,13 @@ duplicate that content here; this file is status, not spec.
 
 **Status: CURRENT, working, tested.** Not experimental, not a stub.
 
+**1.0 compatibility promise** (docs/adr/ADR-014-1-0-compatibility-promise.md,
+Velisa ADR-031): `subtitle.generate` and `subtitle.render` are `STABLE`;
+`subtitle.translate` and `subtitle.mux` stay `EXPERIMENTAL`, and so do the
+newer opt-in fields the ADR lists (ADR-013's, `animate`/`karaoke`, shorts,
+`fonts_dir`, regional profiles, ruby). A breaking change to a `STABLE`
+part needs the `major` label (`major-label-check.yml`).
+
 ## Where this sits in the ecosystem
 
 ```

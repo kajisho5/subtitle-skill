@@ -6,8 +6,8 @@ from subtitle_skill.contract import OPERATIONS, TOOL_ID_PREFIX, build_contract
 def test_provides_tool_ids_use_the_short_subtitle_prefix():
     provides = build_contract()["provides"]
     assert provides == [
-        {"id": "subtitle.generate", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/generate"},
-        {"id": "subtitle.render", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/render"},
+        {"id": "subtitle.generate", "lifecycle": "STABLE", "tool_id": "subtitle/generate"},
+        {"id": "subtitle.render", "lifecycle": "STABLE", "tool_id": "subtitle/render"},
         {"id": "subtitle.translate", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/translate"},
         {"id": "subtitle.mux", "lifecycle": "EXPERIMENTAL", "tool_id": "subtitle/mux"},
     ]
@@ -34,3 +34,19 @@ def test_every_tool_id_names_a_real_operation():
         assert op in OPERATIONS
         assert op in contract["operations"]
     assert sorted(e["tool_id"].split("/")[1] for e in contract["provides"]) == sorted(OPERATIONS)
+
+
+def test_provides_lifecycle_is_the_1_0_promise():
+    """docs/adr/ADR-014-1-0-compatibility-promise.md: generate and render are STABLE; translate (model
+    engines) and the multi-track mux stay EXPERIMENTAL. Promoting an entry is metadata only (si's
+    `lifecycle-promoted` rule), so the rest of the contract is unchanged."""
+    from subtitle_skill.contract import STABLE_OPERATIONS
+
+    lifecycles = {e["tool_id"]: e["lifecycle"] for e in build_contract()["provides"]}
+    assert lifecycles == {
+        "subtitle/generate": "STABLE",
+        "subtitle/render": "STABLE",
+        "subtitle/translate": "EXPERIMENTAL",
+        "subtitle/mux": "EXPERIMENTAL",
+    }
+    assert STABLE_OPERATIONS <= set(OPERATIONS)

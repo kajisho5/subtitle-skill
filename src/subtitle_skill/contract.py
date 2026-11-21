@@ -37,6 +37,14 @@ OPERATIONS = ("generate", "render", "translate", "mux")
 # id today, so this is a new naming decision, not a mechanical derivation - it matches
 # the id already assigned to these two operations in that project's own
 # docs/CAPABILITY_MATRIX.md, kept here as the single source of truth going forward.
+# The 1.0 compatibility promise (docs/adr/ADR-014-1-0-compatibility-promise.md, Velisa ADR-031): a STABLE
+# entry, and the tool it maps to, changes in a breaking way only in a major release. generate and render are the
+# core this skill has shipped since 0.1 and the agent calls; translate (model engines) and the multi-track mux
+# (broken by an ffmpeg-skill change until 0.11.1, #37) stay EXPERIMENTAL. The newer opt-in fields of the two
+# STABLE tools that the ADR lists stay experimental too; a parameter has no lifecycle field, so the ADR and the
+# README say which.
+STABLE_OPERATIONS = frozenset({"generate", "render"})
+
 PROVIDES = {
     "generate": "subtitle.generate",
     "render": "subtitle.render",
@@ -290,7 +298,11 @@ def build_contract() -> dict:
             },
         },
         "provides": [
-            {"id": PROVIDES[op], "lifecycle": "EXPERIMENTAL", "tool_id": f"{TOOL_ID_PREFIX}/{op}"}
+            {
+                "id": PROVIDES[op],
+                "lifecycle": "STABLE" if op in STABLE_OPERATIONS else "EXPERIMENTAL",
+                "tool_id": f"{TOOL_ID_PREFIX}/{op}",
+            }
             for op in OPERATIONS
         ],
         "dependencies": dependencies(),
