@@ -394,7 +394,7 @@ no ARIB writer, ffmpeg-skill#426); TTML is the delivery format instead.
 | `engine` | Needs | Network | Glossary |
 |---|---|---|---|
 | `argos` (default) | `pip install argostranslate` and an **already installed** language package (`argospm install translate-ja_en`). subtitle-skill never downloads a model, and refuses Argos when it is set to a remote provider | never | each source term is replaced by its target term before translating |
-| `opus-mt` | `pip install ctranslate2 sentencepiece`, and an OPUS-MT model **you converted yourself** (`ct2-transformers-converter --model Helsinki-NLP/opus-mt-ja-en --output_dir <dir>/opus-mt-ja-en --copy_files source.spm target.spm`) with `SUBTITLE_SKILL_OPUS_MT_DIR=<dir>`. Weights Apache-2.0. ja→en only in practice (no general en→ja OPUS-MT model) | never | each source term is replaced by its target term before translating |
+| `opus-mt` | `pip install ctranslate2 sentencepiece`, and an OPUS-MT model **you converted yourself** (`ct2-transformers-converter --model Helsinki-NLP/opus-mt-ja-en --output_dir <dir>/opus-mt-ja-en --copy_files source.spm target.spm`) with `SUBTITLE_SKILL_OPUS_MT_DIR=<dir>`. Any pair with a single-target model (see [Choosing an engine/model for English](#choosing-an-enginemodel-for-english)); no general en→ja OPUS-MT model. Weights licence per model card (Apache-2.0 or CC-BY-4.0) | never | each source term is replaced by its target term before translating |
 | `ollama` | A running [Ollama](https://github.com/ollama/ollama) with the model **already pulled** (`ollama pull qwen3:8b`; `SUBTITLE_SKILL_OLLAMA_MODEL` picks another, `SUBTITLE_SKILL_OLLAMA_URL` another server — plain `http://` only to localhost). One request per cue, temperature 0. subtitle-skill never pulls a model | local only, unless you point it at an `https://` server | each source term is replaced by its target term before translating |
 | `deepl` | `DEEPL_AUTH_KEY` in the environment (never in the request: `api_key` is a forbidden field). A key ending in `:fx` uses `api-free.deepl.com`; `SUBTITLE_SKILL_DEEPL_API_URL` overrides the URL | yes | a native DeepL glossary, created for the call and deleted after |
 | `memory` | `translation_memory`: exact source → target pairs (whitespace-insensitive) from a human, an earlier job or an agent's own translation | never | the stored targets are used as given |
@@ -404,6 +404,26 @@ no ARIB writer, ffmpeg-skill#426); TTML is the delivery format instead.
 - **Glossary terms are checked** in every engine's output: a missing target term is a `GLOSSARY_TERM_MISSING` observation.
 - The response's `subtitle` is the translated document (each cue's `metadata.translation.source_text` keeps the original); `engine` / `engine_version` (Argos and model package version, CTranslate2 version and the OPUS-MT model's sha256, the Ollama version and model digest, `deepl-api v2`, or the memory's hash) are recorded in the sidecar and in `subtitle.metadata.translation`, and are part of the reuse identity, so a repeated request is never translated (or billed) twice.
 - `doctor --json` lists which engines can run here under `translation_engines`, with each engine's `weights_licence`. **Commercial work: the licence of the Argos ja→en weights is not stated anywhere** — not in the index, the package's `metadata.json` or its README (checked 2026-10-31) — so use `engine: "opus-mt"` (Apache-2.0 weights) for ja→en, or `ollama` with an Apache-2.0 model such as Qwen3. `argos` stays the default so an omitted `engine` keeps its meaning. No engine's Japanese quality is measured here ([ADR-004](docs/adr/ADR-004-translation-engine.md), addendum).
+
+#### Choosing an engine/model for English
+
+The default engine stays `argos`, and the Ollama default model stays `qwen3:8b`. For subtitles from or into English, these opt-in choices already work with the engines above. Pick them per request (`engine`) or by environment variable; nothing changes unless you ask for it:
+
+| choice | how | licence | size | notes |
+|---|---|---|---|---|
+| OPUS-MT tc-big, single-target English pairs (`opus-mt-tc-big-en-es`, `-en-fr`, `-en-it`, `-en-tr`, …) | `engine: "opus-mt"`; convert `Helsinki-NLP/opus-mt-tc-big-en-es` with `ct2-transformers-converter … --copy_files source.spm target.spm` into `<dir>/opus-mt-en-es` | CC-BY-4.0 (attribute "OPUS-MT, Helsinki-NLP") | about 0.23 B parameters; 466 MB of weights before conversion | offline, CPU |
+| OPUS-MT, older single-pair models (`opus-mt-en-de`, `opus-mt-ja-en`, `opus-mt-en-zh`, …) | as above, into `<dir>/opus-mt-<src>-<tgt>` | per model card: `opus-mt-en-de` CC-BY-4.0, `opus-mt-ja-en` and `opus-mt-en-zh` Apache-2.0 | about 300 MB of weights each | offline, CPU |
+| Qwen3.5 9B on Ollama | `engine: "ollama"`, `ollama pull qwen3.5:9b`, `SUBTITLE_SKILL_OLLAMA_MODEL=qwen3.5:9b` | Apache-2.0 | 6.6–7.6 GB download | local LLM, many languages; slower than OPUS-MT |
+| Qwen3.5 4B on Ollama | `ollama pull qwen3.5:4b`, `SUBTITLE_SKILL_OLLAMA_MODEL=qwen3.5:4b` | Apache-2.0 | 3.3–4.0 GB download | when disk is tight |
+| Gemma 4 E4B on Ollama | `ollama pull gemma4:e4b`, `SUBTITLE_SKILL_OLLAMA_MODEL=gemma4:e4b` | Apache-2.0 | 6.6–9.5 GB download | a second local LLM option |
+
+- No engine's quality is measured here, and the tc-big and Qwen3.5 / Gemma 4 choices have not been run through subtitle-skill. The engines take any converted single-target pair or any pulled model. Read the result before publishing.
+- Qwen3.5 thinks by default. subtitle-skill sends `think: false` and strips any `<think>…</think>` block from the reply. Whether Ollama honours `think: false` for Qwen3.5 has not been checked here.
+- `doctor`'s `weights_licence` line for `opus-mt` says Apache-2.0. The licence is per model: read the card of the pair you convert (the tc-big models and `opus-mt-en-de` are CC-BY-4.0).
+
+**Not yet supported:**
+- multi-target OPUS-MT tc-big models such as `opus-mt-tc-big-en-pt` and `-en-ar`. They need a target-language token (`>>por<<`) at the start of each sentence, and the `opus-mt` engine does not add one.
+- en→ja through OPUS-MT. No general en→ja OPUS-MT model exists, so use `ollama` or `memory` for Japanese.
 
 ### `mux`
 
