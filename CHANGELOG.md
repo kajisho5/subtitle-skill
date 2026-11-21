@@ -1,3 +1,7 @@
+## v0.11.1 - 2026-11-21
+
+- fix(render): mux with ffmpeg-skill 4.1+, which refuses --max-lines in mux mode (#37) (#51) (32c6a1e)
+
 ## v0.11.0 - 2026-11-20
 
 - feat(render): caption quality for talking-head video (roadmap step 13) (#50) (31af99e)
