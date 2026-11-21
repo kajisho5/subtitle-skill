@@ -219,6 +219,37 @@ def test_the_missing_words_are_named_by_their_index_in_the_request(tmp_path, ffm
     assert exc.value.details["field"] == "subtitle.cues[1].words"
 
 
+def test_karaoke_on_overlapping_cues_is_refused_naming_the_later_cue(tmp_path, ffmpeg_skill_install):
+    """#45: caption.py reads the word timings by time from one flat words file, so where two cues
+    overlap one of them loses its words while the response reports cue.words as used."""
+    _video(tmp_path / "in.mp4")
+    overlapping = {**FIXTURE["cues"][0], "id": "2", "start": 2.4, "end": 2.9, "text": "GO",
+                   "words": [{"text": "GO", "start": 2.4, "end": 2.9}]}
+    with pytest.raises(SubtitleSkillError) as exc:
+        execute(_request(tmp_path, subtitle={**FIXTURE, "cues": [overlapping, FIXTURE["cues"][0]]}, karaoke="sweep"))
+    assert exc.value.code == "INVALID_INPUT"
+    assert exc.value.details == {"field": "subtitle.cues[0].start", "cue_id": "2", "conflicts_with": ["1"]}
+    assert not (tmp_path / "out.mp4").exists()
+
+
+def test_karaoke_on_back_to_back_cues_still_burns(tmp_path, ffmpeg_skill_install):
+    _video(tmp_path / "in.mp4")
+    after = {**FIXTURE["cues"][0], "id": "2", "start": 2.6, "end": 2.9, "text": "GO",
+             "words": [{"text": "GO", "start": 2.6, "end": 2.9}]}
+    response = execute(_request(tmp_path, subtitle={**FIXTURE, "cues": [FIXTURE["cues"][0], after]}, karaoke="sweep"))
+    assert response["animation"]["word_timings"] == "cue.words"
+    assert (tmp_path / "out.mp4").exists()
+
+
+def test_overlapping_cues_without_karaoke_are_not_refused_by_the_animation_check(tmp_path, ffmpeg_skill_install):
+    _video(tmp_path / "in.mp4")
+    overlapping = {**FIXTURE["cues"][0], "id": "2", "start": 2.4, "end": 2.9, "text": "GO",
+                   "words": [{"text": "GO", "start": 2.4, "end": 2.9}]}
+    response = execute(_request(tmp_path, subtitle={**FIXTURE, "cues": [FIXTURE["cues"][0], overlapping]},
+                                animate="fade"))
+    assert response["animation"]["karaoke"] is None
+
+
 @pytest.mark.parametrize("name", ["out_adjusted.words.json", "out.subtitle-skill-src.words.json",
                                   "out.subtitle-skill-src.animated.ass"])
 def test_an_existing_side_file_is_refused_and_kept(tmp_path, ffmpeg_skill_install, name):

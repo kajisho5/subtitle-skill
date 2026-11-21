@@ -304,6 +304,8 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
     - `karaoke` on a cue without `words`, or whose drawn text does not split
       into as many space-separated words as it has `words` (caption.py would
       then ignore the timings and split the cue evenly);
+    - `karaoke` on cues whose time ranges overlap: caption.py reads the word
+      timings by time, so one of the overlapping cues would lose them;
     - `animate` with `karaoke: "word"`: caption.py's per-word events make the
       caption blink out after its first word (see the ADR).
     """
@@ -380,6 +382,22 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
                     "(a speaker prefix or ruby reading counts as words too)",
                     details={"field": f"subtitle.cues[{index}].words", "cue_id": cue.id},
                 )
+        # caption.py reads every cue's words from one flat .words.json and gives each cue the
+        # words inside its time range: where two cues overlap, a word belongs to both ranges
+        # and one cue loses its timings while the response still reports cue.words as used
+        latest = None  # the earlier cue that ends last
+        for sorted_index, cue in enumerate(document.cues):
+            index = request_index.get(cue.id, sorted_index)
+            if latest is not None and cue.start < latest.end:
+                raise SubtitleSkillError(
+                    "INVALID_INPUT",
+                    f"karaoke: cue {cue.id} starts at {cue.start}s, before cue {latest.id} ends at {latest.end}s; "
+                    "ffmpeg-skill caption reads the word timings by time, so overlapping cues would lose theirs",
+                    details={"field": f"subtitle.cues[{index}].start", "cue_id": cue.id,
+                             "conflicts_with": [latest.id]},
+                )
+            if latest is None or cue.end > latest.end:
+                latest = cue
     resolved_animate = animate if animate is not None else "none"
     return {
         "animate": resolved_animate,
