@@ -68,6 +68,11 @@ Agent wires generate, render burn and render's mux mode (video-production-agent#
   - Why: one field gives a tasteful, consistent look per channel or client instead of hand-set style flags（なぜ要るか：チャンネルや顧客ごとの見た目を、1 つの指定で揃えられる）
   - Done when: each bundled preset burns on a lavfi clip and the decoded frames show its size (± 10 % of the stated % of height), its colour, its case and its position; a caller's preset file with an unknown key, a path or override tags is `INVALID_INPUT` naming the key; a preset with `emphasis` draws the preset's highlight; no preset field sends the same engine call; nothing over 1 MB is added to the repository
 
+- [x] **15. 1.0.0: the compatibility promise** — Velisa ADR-031 / D46: mark as `STABLE` only what this skill is ready to keep, and ship breaking changes to it only in a major release
+  - Why: a dependent can tell from the version alone whether a release can break it（なぜ要るか：バージョン番号だけで、壊れる変更かどうかが分かる）
+  - Done when: `provides[].lifecycle` marks the chosen entries `STABLE`, the README and an ADR state the promise and what stays experimental, the contract diff is `none`, and the release is 1.0.0 through the `major` label
+  - Done ([ADR-014](docs/adr/ADR-014-1-0-compatibility-promise.md), [#53](https://github.com/kajisho5/subtitle-skill/pull/53)): `subtitle.generate` and `subtitle.render` are `STABLE`; `subtitle.translate` and `subtitle.mux` stay `EXPERIMENTAL`, and so do the newer opt-in fields the ADR lists. Step 14 is additive and does not block it
+
 ## Boundaries
 
 Under the [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/pull/156) (O11): animated captions made from subtitle cues are this skill's (step 12); caption effects timed to words in a transcript (remotion-ffmpeg-skill `Captioned --words`, `Karaoke`, `Emphasis`) are remotion-ffmpeg-skill's; single timed text elements (sticker, hook) are motion-graphics-skill's. Transcription exports SRT/VTT as views. dubbing-skill takes translated cues from `translate` (its step 11).
