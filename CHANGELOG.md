@@ -1,3 +1,7 @@
+## v1.0.0 - 2026-11-21
+
+- feat!: 1.0.0 - generate and render are STABLE; breaking changes to them only in a major release (ADR-014) (#53) (7f5aa88)
+
 ## v0.11.2 - 2026-11-21
 
 - fix(render): refuse karaoke on overlapping cues (#45) (#52) (d50742a)
