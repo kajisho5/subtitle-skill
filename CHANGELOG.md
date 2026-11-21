@@ -1,3 +1,7 @@
+## v0.11.2 - 2026-11-21
+
+- fix(render): refuse karaoke on overlapping cues (#45) (#52) (d50742a)
+
 ## v0.11.1 - 2026-11-21
 
 - fix(render): mux with ffmpeg-skill 4.1+, which refuses --max-lines in mux mode (#37) (#51) (32c6a1e)
