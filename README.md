@@ -393,7 +393,7 @@ no ARIB writer, ffmpeg-skill#426); TTML is the delivery format instead.
 - One `caption.py --mode mux` call with `--srt FILE:LANG` per track (ffmpeg-skill 1.16+ for more than one track, titles or a default track). Video and audio are copied untouched.
 - The subtitle codec follows the container: `mov_text` in `.mp4`/`.m4v`/`.mov`, SubRip in `.mkv`, WebVTT in `.webm`. MPEG-4 stores ISO 639-2 language codes, so ffmpeg-skill writes `ja` as `jpn` and `en` as `eng` (reported as `tracks[].stored_language`); Matroska keeps the tag as given. MPEG-4 also drops track titles and always enables its first subtitle track. `.mkv` is the honest multi-language container.
 - Each track's language is its document's `language`; two tracks may not share one. A title goes on every track or on none.
-- Every document is validated against ffmpeg-skill's probed duration (a cue past the end rejects the request, with the track's language in the cue id: `ja:2`). Timing passes through unchanged: caption.py is told not to lengthen or split cues (`--min-duration 0`, a `--max-lines` no cue reaches), which it would otherwise do to the first track only. It can still re-wrap the first track's lines for a narrow frame (it has no switch for that); when it does, the response carries a `TRACK_RELAID_OUT` observation.
+- Every document is validated against ffmpeg-skill's probed duration (a cue past the end rejects the request, with the track's language in the cue id: `ja:2`). Timing passes through unchanged: caption.py is told not to lengthen cues (`--min-duration 0`), which it would otherwise do to the first track only. Before ffmpeg-skill 4.1 it also split and re-wrapped the first track, so it is given a `--max-lines` no cue reaches; it can still re-wrap that track's lines for a narrow frame, and the response then carries a `TRACK_RELAID_OUT` observation. ffmpeg-skill 4.1+ muxes the cues as they are and refuses `--max-lines` in mux mode, so the flag is not sent there.
 - ASS tracks are not muxed: subtitle-skill generates no ASS, and caption.py refuses `--mode mux --ass`.
 
 `contract --json` also publishes `provides`: `generate` as Capability id
@@ -788,7 +788,7 @@ all three OSes.
 | `contract --json` | the authoritative, machine-readable operation/format/error list — if this README and the live contract ever disagree, the contract is correct |
 | [tests/fixtures/ffmpeg_skill_vendor/README.md](tests/fixtures/ffmpeg_skill_vendor/README.md) | provenance of the vendored ffmpeg-skill scripts used in the render tests |
 | [CLAUDE.md](CLAUDE.md) | repository status for maintainers: ecosystem integration state, known gaps, next tasks |
-| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption`; [ADR-013](docs/adr/ADR-013-caption-quality.md): cut-aware cues, spoken numbers, emphasis, automatic legibility (and the evaluation of style presets and text behind the speaker) |
+| [docs/adr/](docs/adr/) | architecture decision records — [ADR-001](docs/adr/ADR-001-locale-profiles.md): locale profiles (ja/zh/ko) and the sources of their defaults; [ADR-002](docs/adr/ADR-002-provides-tool-id-prefix.md): `provides` tool-id prefix; [ADR-003](docs/adr/ADR-003-single-source-version.md): version and ffmpeg-skill dependency, each from one source; [ADR-004](docs/adr/ADR-004-translation-engine.md): translation engines (Argos / OPUS-MT / Ollama / DeepL / memory), licences and prices; [ADR-005](docs/adr/ADR-005-multi-language-mux.md): multi-language mux; [ADR-006](docs/adr/ADR-006-caption-placement.md): captions placed away from faces; [ADR-007](docs/adr/ADR-007-ttml-output.md): TTML output (IMSC 1.1, EBU-TT-D); [ADR-008](docs/adr/ADR-008-regional-profiles.md): regional caption profiles (`ja-broadcast`), ruby, vertical text; [ADR-009](docs/adr/ADR-009-shorts-captions.md): shorts captions; [ADR-010](docs/adr/ADR-010-fonts-dir.md): `fonts_dir`, a burn with the caller's own font files; [ADR-011](docs/adr/ADR-011-animated-captions.md): animated captions passed through to ffmpeg-skill `caption`; [ADR-013](docs/adr/ADR-013-caption-quality.md): cut-aware cues, spoken numbers, emphasis, automatic legibility (and the evaluation of style presets and text behind the speaker); [ADR-014](docs/adr/ADR-014-1-0-compatibility-promise.md): the 1.0 compatibility promise, which entries and fields are `STABLE` |
 | [tests/fixtures/translation/](tests/fixtures/translation/) | ja→en and en→ja acceptance fixtures for `translate` |
 
 ## Limitations / Out of scope
@@ -812,6 +812,23 @@ Translation (字幕翻訳) belongs to this skill in the AI Video Production OS
 split over two cues is translated as two segments; glossary matching is exact
 (no inflection or case folding on the source side); Google Cloud Translation and
 LLM engines are not implemented. `mux` does not carry ASS tracks.
+
+## Compatibility promise (1.0)
+
+From 1.0.0 the release version follows the contract ([ADR-014](docs/adr/ADR-014-1-0-compatibility-promise.md), Velisa ADR-031). `si contract-diff` reports on every pull request whether a contract change is breaking, additive or neither:
+
+- **Covered (`STABLE`):**
+  - `subtitle/generate` (`subtitle.generate`): validation of the `SubtitleDocument` (cue `id`, `start`, `end`, `text`, `speaker`, `style`, `metadata`), `constraints` and the ja/zh/ko locale profiles, and output as SRT, WebVTT, TTML (IMSC 1.1) and EBU-TT-D;
+  - `subtitle/render` (`subtitle.render`): `mode` `burn` and `mux`, `audio_stream`, the `style.color` / `bold` / `size` forwarding, and `placement`;
+  - the request, response and error shapes of those tools, the error codes, and the top-level contract fields.
+
+  A breaking change to any of these ships only in a major release (2.0.0). An addition ships in a minor release. A release with no contract change is a patch.
+- **Experimental:**
+  - the `EXPERIMENTAL` entries `subtitle/translate` (its model engines) and `subtitle/mux` (multi-language mux);
+  - these fields of the two `STABLE` tools: `cuts`, `spoken_numbers`, `emphasis`, `legibility`, `animate`, `karaoke`, cue `words`, `caption_profile`, `fonts_dir`, `regional_profile`, cue `ruby` and `style.vertical`. A field has no lifecycle in the contract, so this list is where its status is stated.
+
+  These may still change in a minor release, and the CHANGELOG entry names the change. An entry or field is promoted to `STABLE` in any release, with no shape change. The `provides[].lifecycle` field in `contract/contract.json` gives each entry's status.
+- **Deprecation:** a `STABLE` entry or field is first marked `DEPRECATED` in a minor release, with its replacement named here and in the CHANGELOG. It keeps working for at least one more minor release and 30 days. Only a major release removes it.
 
 ## Support
 
