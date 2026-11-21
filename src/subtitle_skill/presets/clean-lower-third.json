@@ -1,0 +1,16 @@
+{
+  "name": "clean-lower-third",
+  "font": ["DejaVu Sans", "Liberation Sans", "Noto Sans"],
+  "size": 6.5,
+  "color": "FFFFFF",
+  "outline_color": "000000",
+  "outline": 0.3,
+  "shadow": 0.4,
+  "case": "none",
+  "position": "lower-third",
+  "margin": 8,
+  "bold": false,
+  "box": "none",
+  "highlight": {"color": "7FD4FF", "bold": false},
+  "animation": "none"
+}

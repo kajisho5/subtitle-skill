@@ -1,0 +1,16 @@
+{
+  "name": "bold-short-form",
+  "font": ["DejaVu Sans", "Liberation Sans", "Noto Sans"],
+  "size": 9,
+  "color": "FFFFFF",
+  "outline_color": "000000",
+  "outline": 0.9,
+  "shadow": 0,
+  "case": "upper",
+  "position": "bottom",
+  "margin": 18,
+  "bold": true,
+  "box": "none",
+  "highlight": {"color": "FFD84A", "bold": true},
+  "animation": "none"
+}

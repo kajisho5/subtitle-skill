@@ -1,6 +1,6 @@
 # ADR-013: Caption Quality for Talking-Head Video
 
-Status: Accepted (parts 1-4 implemented; part 5 is a roadmap step; part 6 is an evaluation only)
+Status: Accepted (parts 1-4 implemented; part 5 implemented in roadmap step 14, see ADR-015; part 6 is an evaluation only)
 
 ## Context
 
@@ -75,7 +75,7 @@ When one of emphasis, legibility or a spaced number sends a burn to this skill's
 
 None of the code above runs unless its field is present. Without them the argv sent to caption.py, the identity payload's keys and the response are as before. `emphasis: "off"` and `legibility: "off"` are the same as absent and reuse an earlier render. `tests/test_caption_quality.py` checks all three with a recording fake caption.py. The rest of the suite (placement, ruby, shorts, animation) passes unchanged.
 
-### 5. Style presets as data (not implemented: roadmap step 14)
+### 5. Style presets as data (implemented in roadmap step 14: [ADR-015](ADR-015-style-presets.md) records the build and its choices)
 
 Design, so the step can be done without re-deciding:
 

@@ -407,6 +407,31 @@ def _parse_animation(request: Mapping[str, Any], document: SubtitleDocument, *, 
     }
 
 
+def _check_preset_conflicts(preset, request: Mapping[str, Any], document: SubtitleDocument, *, mode: str,
+                            caption_profile, legibility: bool) -> None:
+    """The combinations a style preset cannot draw (docs/adr/ADR-015-style-presets.md), refused
+    with the field and what it conflicts with. `animate` / `karaoke` are refused by
+    `_parse_animation`, as for every burn through this skill's own ASS."""
+    def refuse(message, field, conflicts):
+        raise SubtitleSkillError("INVALID_INPUT", message, details={"field": field, "conflicts_with": conflicts})
+
+    if mode != "burn":
+        refuse(f"style_preset is drawn into the picture: it needs mode 'burn', not a soft track ({mode!r})",
+               "style_preset", ["mode"])
+    if caption_profile is not None:
+        refuse("style_preset cannot be combined with caption_profile: the shorts profile sets its own size and "
+               "position", "style_preset", ["caption_profile"])
+    if any(c.ruby for c in document.cues):
+        refuse("style_preset cannot be combined with cue ruby: ruby is laid out at fixed positions this skill "
+               "computes for the default look", "style_preset", ["ruby"])
+    if preset.position == "top" and request.get("placement") is not None:
+        refuse("a style_preset at the top cannot be combined with placement, which moves cues from the bottom "
+               "to the top caption box", "style_preset", ["placement"])
+    if preset.box != "none" and legibility:
+        refuse("legibility cannot be combined with a style_preset that draws a box behind the text: the box is "
+               "the preset's legibility treatment", "legibility", ["style_preset"])
+
+
 def _word_timings(document: SubtitleDocument) -> list:
     """Every cue's `words`, in the shape caption.py reads from a `.words.json`."""
     return [
@@ -498,6 +523,22 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         if used and mode != "burn":
             raise SubtitleSkillError("INVALID_INPUT", f"{name} is drawn into the picture: it needs mode 'burn'",
                                      details={"field": name, "conflicts_with": ["mode"]})
+    # request.style_preset (docs/adr/ADR-015-style-presets.md): a named caption look, bundled or
+    # the caller's own JSON file, read against an allowlist. Burn only, through this skill's ASS.
+    preset = None
+    if request.get("style_preset") is not None:
+        from .style_presets import parse_style_preset
+
+        preset = parse_style_preset(request["style_preset"], policy)
+        _check_preset_conflicts(preset, request, document, mode=mode, caption_profile=caption_profile,
+                                legibility=legibility_mode is not None)
+        if emphasis_spec is not None and preset.highlight_color is not None and not (
+            isinstance(emphasis_spec.raw, Mapping) and "color" in emphasis_spec.raw
+        ):
+            from dataclasses import replace as _replace
+
+            # an explicit emphasis.color wins; otherwise the preset's highlight colour is used
+            emphasis_spec = _replace(emphasis_spec, color=preset.highlight_color)
     spaced_numbers = False
     if numbers_report is not None:
         from .numbers import has_spaced_token
@@ -511,6 +552,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
             ("emphasis", emphasis_spec is not None),
             ("legibility", legibility_mode is not None),
             ("spoken_numbers", spaced_numbers),
+            ("style_preset", preset is not None),
         )
         if used and mode == "burn"
     )
@@ -622,6 +664,14 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 )
             )
 
+    # the preset's family: the first of its chain that fontconfig lists (fonts_dir's family wins)
+    preset_font = None
+    if preset is not None and font_choice is None and preset.fonts:
+        from .style_presets import installed_families, resolve_font
+
+        family, found = resolve_font(preset.fonts, installed_families())
+        preset_font = {"family": family, "installed": found}
+
     cuts_report = None
     if cut_spec is not None:
         from .cuts import apply_cuts, detect_cuts, read_shots
@@ -679,7 +729,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         legibility_report = _measure_legibility(
             video_path, shorts_document or document, width=width, height=height,
             positions=placement_plan.positions if placement_plan is not None else {},
-            size=_document_wide_style_value(document, "size"), shorts_layout=shorts_layout,
+            size=_document_wide_style_value(document, "size"), shorts_layout=shorts_layout, preset=preset,
         )
 
     # The render identity is anchored on the *content* of the ffmpeg-skill
@@ -726,6 +776,13 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 **({"legibility": {c["cue_id"]: c["treatment"] for c in legibility_report["cues"]}}
                    if legibility_report is not None else {}),
                 **({"spoken_numbers": numbers_report["locale"]} if numbers_report is not None else {}),
+                # what the preset draws (its values and the family named), never where its file was
+                **(
+                    {"style_preset": {**{k: v for k, v in preset.to_dict().items() if k != "source"},
+                                      "font_family": preset_font["family"] if preset_font else None}}
+                    if preset is not None
+                    else {}
+                ),
                 # the family named and the bytes of every font file libass may draw from;
                 # the directory's own path is not part of what was drawn
                 **(
@@ -777,6 +834,8 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
 
         positions = placement_plan.positions if placement_plan is not None else None
         font = font_choice.family if font_choice is not None else None
+        if font is None and preset_font is not None:
+            font = preset_font["family"]
         look = None
         if emphasis_plan is not None or legibility_report is not None:
             from .emphasis import marks_by_cue
@@ -788,6 +847,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
                 if legibility_report is not None else None,
                 boxes={c["cue_id"]: tuple(c["box"]) for c in legibility_report["cues"]}
                 if legibility_report is not None else None,
+                highlight_bold=preset.highlight_bold if preset is not None else True,
             )
         if shorts_document is not None:
             subtitle_content = generate_shorts_ass(
@@ -796,7 +856,7 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         else:
             subtitle_content = generate_ass(
                 document, width=width, height=height, positions=positions, style=effective_style, font=font,
-                look=look, wrap=bool(quality),
+                look=look, wrap=bool(quality), preset=preset,
             )
         burn_format, burn_style = "ass", None
     subtitle_tmp_path = output_path.with_name(output_path.stem + f".subtitle-skill-src.{burn_format}")
@@ -870,6 +930,12 @@ def _run_render(policy, document, fmt, output_path_rel, constraints, issues, req
         record["emphasis"] = emphasis_plan
     if legibility_report is not None:
         record["legibility"] = legibility_report
+    if preset is not None:
+        record["style_preset"] = {
+            **preset.to_dict(),
+            "font_family": preset_font["family"] if preset_font else (font_choice.family if font_choice else None),
+            "font_installed": preset_font["installed"] if preset_font else None,
+        }
     if shorts_document is not None:
         from .shorts import MAX_WORDS, SAFE
 
@@ -945,13 +1011,13 @@ def _finish(
         response["caption_profile"] = record["caption_profile"]
     if record.get("animation") is not None:
         response["animation"] = record["animation"]
-    for key in ("cuts", "spoken_numbers", "emphasis", "legibility"):
+    for key in ("cuts", "spoken_numbers", "emphasis", "legibility", "style_preset"):
         if record.get(key) is not None:
             response[key] = record[key]
     return response
 
 
-def _measure_legibility(video_path, document, *, width, height, positions, size, shorts_layout) -> dict:
+def _measure_legibility(video_path, document, *, width, height, positions, size, shorts_layout, preset=None) -> dict:
     """`legibility: "auto"` (docs/adr/ADR-013-caption-quality.md, part 4): the box each cue's
     text is drawn in, from the layout the ASS writer uses, measured on sampled frames."""
     import math
@@ -968,7 +1034,10 @@ def _measure_legibility(video_path, document, *, width, height, positions, size,
     regions = []
     for cue in document.cues:
         text = "".join(seg for seg, _r in display_segments(cue))
-        color = cue.style.color.strip().lstrip("#") if cue.style is not None and cue.style.color else DEFAULT_COLOR
+        if preset is not None:
+            text = preset.apply_case(text)
+        base = preset.color if preset is not None and preset.color else DEFAULT_COLOR
+        color = cue.style.color.strip().lstrip("#") if cue.style is not None and cue.style.color else base
         color = color[2:] if color.lower().startswith("0x") else color
         position = positions.get(cue.id, "bottom")
         if shorts_layout is not None:
@@ -978,6 +1047,8 @@ def _measure_legibility(video_path, document, *, width, height, positions, size,
             h = fs * 1.4
             y = (box.y + box.h) * height - h
         else:
+            if not size and preset is not None and preset.size is not None:
+                size = preset.size
             fs = scaled(size / 100.0 * ASS_SCRIPT_HEIGHT if size else DEFAULT_SIZE_POINTS)
             room = width * 0.9
             lines = text.split("\n")
@@ -986,8 +1057,14 @@ def _measure_legibility(video_path, document, *, width, height, positions, size,
             w = min(room, widest) + fs
             h = count * fs * 1.25 + 2 * scaled(DEFAULT_OUTLINE_POINTS)
             margin = scaled(DEFAULT_MARGIN_POINTS)
+            if preset is not None and preset.margin is not None:
+                margin = max(0, round(preset.margin / 100.0 * height))
+            if preset is not None and position != "top" and preset.position == "top":
+                position = "top"
             y = margin if position == "top" else height - margin - h
         x = (width - w) / 2.0
+        if shorts_layout is None and preset is not None and preset.position == "lower-third" and position != "top":
+            x = max(0.0, width * 0.05 - fs / 2.0)  # left aligned at the side margin (half a line of padding)
         regions.append(Region(cue.id, int(round(x)), int(round(y)), int(round(w)), int(round(h)),
                               cue.start, cue.end, color))
     measured = measure(video_path, regions, width=width, height=height)
