@@ -1,3 +1,7 @@
+## v1.1.0 - 2026-11-21
+
+- feat(render): style presets as data (roadmap step 14) (#54) (0deb85d)
+
 ## v1.0.0 - 2026-11-21
 
 - feat!: 1.0.0 - generate and render are STABLE; breaking changes to them only in a major release (ADR-014) (#53) (7f5aa88)
