@@ -412,7 +412,7 @@ The default engine stays `argos`, and the Ollama default model stays `qwen3:8b`.
 | choice | how | licence | size | notes |
 |---|---|---|---|---|
 | OPUS-MT tc-big, single-target English pairs (`opus-mt-tc-big-en-es`, `-en-fr`, `-en-it`, `-en-tr`, …) | `engine: "opus-mt"`; convert `Helsinki-NLP/opus-mt-tc-big-en-es` with `ct2-transformers-converter … --copy_files source.spm target.spm` into `<dir>/opus-mt-en-es` | CC-BY-4.0 (attribute "OPUS-MT, Helsinki-NLP") | about 0.23 B parameters; 466 MB of weights before conversion | offline, CPU |
-| OPUS-MT, older single-pair models (`opus-mt-en-de`, `opus-mt-ja-en`, `opus-mt-en-zh`, …) | as above, into `<dir>/opus-mt-<src>-<tgt>` | per model card: `opus-mt-en-de` CC-BY-4.0, `opus-mt-ja-en` and `opus-mt-en-zh` Apache-2.0 | about 300 MB of weights each | offline, CPU |
+| OPUS-MT, older single-pair models (`opus-mt-en-de`, `opus-mt-en-es`, `opus-mt-ja-en`, …) | as above, into `<dir>/opus-mt-<src>-<tgt>` | per model card: `opus-mt-en-de` CC-BY-4.0, `opus-mt-en-es` and `opus-mt-ja-en` Apache-2.0 | about 300 MB of weights each | offline, CPU |
 | Qwen3.5 9B on Ollama | `engine: "ollama"`, `ollama pull qwen3.5:9b`, `SUBTITLE_SKILL_OLLAMA_MODEL=qwen3.5:9b` | Apache-2.0 | 6.6–7.6 GB download | local LLM, many languages; slower than OPUS-MT |
 | Qwen3.5 4B on Ollama | `ollama pull qwen3.5:4b`, `SUBTITLE_SKILL_OLLAMA_MODEL=qwen3.5:4b` | Apache-2.0 | 3.3–4.0 GB download | when disk is tight |
 | Gemma 4 E4B on Ollama | `ollama pull gemma4:e4b`, `SUBTITLE_SKILL_OLLAMA_MODEL=gemma4:e4b` | Apache-2.0 | 6.6–9.5 GB download | a second local LLM option |
@@ -422,7 +422,7 @@ The default engine stays `argos`, and the Ollama default model stays `qwen3:8b`.
 - `doctor`'s `weights_licence` line for `opus-mt` says Apache-2.0. The licence is per model: read the card of the pair you convert (the tc-big models and `opus-mt-en-de` are CC-BY-4.0).
 
 **Not yet supported:**
-- multi-target OPUS-MT tc-big models such as `opus-mt-tc-big-en-pt` and `-en-ar`. They need a target-language token (`>>por<<`) at the start of each sentence, and the `opus-mt` engine does not add one.
+- multi-target OPUS-MT models such as `opus-mt-tc-big-en-pt`, `opus-mt-tc-big-en-ar` and `opus-mt-en-zh` (its targets include `cmn_Hans`, `cmn_Hant` and `yue`). They need a target-language token (`>>por<<`, `>>cmn_Hans<<`) at the start of each sentence, and the `opus-mt` engine does not add one.
 - en→ja through OPUS-MT. No general en→ja OPUS-MT model exists, so use `ollama` or `memory` for Japanese.
 
 ### `mux`
